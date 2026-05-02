@@ -138,6 +138,34 @@ class UpstreamClientBehaviorTests(unittest.TestCase):
         self.assertEqual(calls, 2)
         self.assertEqual(len(result["data"]), 1)
 
+    def test_generate_parallel_accepts_more_than_requested_when_upstream_returns_extra_images(self):
+        client = self.make_client()
+        calls = 0
+
+        def fake_generate_once(*, prompt: str, model: str, size: str | None, base_url: str | None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {
+                    "created": 100,
+                    "data": [
+                        {"url": "http://example.test/1.png"},
+                        {"url": "http://example.test/2.png"},
+                    ],
+                }
+            return {"created": 100 + calls, "data": [{"url": f"http://example.test/{calls + 1}.png"}]}
+
+        with patch.object(client, "_generate_once", side_effect=fake_generate_once):
+            result = client.generate(prompt="cat", model="gpt-image-2", n=3, size=None, base_url="http://local.test")
+
+        self.assertEqual(len(result["data"]), 4)
+        self.assertEqual({item["url"] for item in result["data"]}, {
+            "http://example.test/1.png",
+            "http://example.test/2.png",
+            "http://example.test/3.png",
+            "http://example.test/4.png",
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

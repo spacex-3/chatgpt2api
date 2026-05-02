@@ -242,9 +242,9 @@ class UpstreamOpenAIImageClient:
             for item in items:
                 if isinstance(item, dict):
                     data.append(item)
-        if len(data) != expected_count:
+        if len(data) < expected_count:
             raise ImageGenerationError(
-                f"expected {expected_count} image results but received {len(data)}",
+                f"expected at least {expected_count} image results but received {len(data)}",
                 status_code=502,
                 error_type="server_error",
                 code="invalid_upstream_payload",
