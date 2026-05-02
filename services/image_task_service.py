@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from services.config import DATA_DIR, config
-from services.protocol import openai_v1_image_edit, openai_v1_image_generations
+from services.upstream_openai_image_client import UpstreamImageInput, UpstreamOpenAIImageClient
 
 TASK_STATUS_QUEUED = "queued"
 TASK_STATUS_RUNNING = "running"
@@ -17,6 +17,7 @@ TASK_STATUS_SUCCESS = "success"
 TASK_STATUS_ERROR = "error"
 TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}
 UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}
+SUPPORTED_IMAGE_MODEL = "gpt-image-2"
 
 
 def _now_iso() -> str:
@@ -53,7 +54,7 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
     item = {
         "id": task.get("id"),
         "status": task.get("status"),
-        "mode": task.get("mode"),
+        "mode": task.get("mode") or "generate",
         "model": task.get("model"),
         "size": task.get("size"),
         "created_at": task.get("created_at"),
@@ -66,13 +67,34 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _default_generation_handler(payload: dict[str, Any]) -> dict[str, Any]:
+    return UpstreamOpenAIImageClient().generate(
+        prompt=str(payload.get("prompt") or ""),
+        model=str(payload.get("model") or SUPPORTED_IMAGE_MODEL),
+        n=int(payload.get("n") or 1),
+        size=str(payload.get("size") or "").strip() or None,
+        base_url=str(payload.get("base_url") or "").strip() or None,
+    )
+
+
+def _default_edit_handler(payload: dict[str, Any]) -> dict[str, Any]:
+    return UpstreamOpenAIImageClient().edit(
+        prompt=str(payload.get("prompt") or ""),
+        model=str(payload.get("model") or SUPPORTED_IMAGE_MODEL),
+        n=int(payload.get("n") or 1),
+        size=str(payload.get("size") or "").strip() or None,
+        images=list(payload.get("images") or []),
+        base_url=str(payload.get("base_url") or "").strip() or None,
+    )
+
+
 class ImageTaskService:
     def __init__(
         self,
         path: Path,
         *,
-        generation_handler: Callable[[dict[str, Any]], dict[str, Any]] = openai_v1_image_generations.handle,
-        edit_handler: Callable[[dict[str, Any]], dict[str, Any]] = openai_v1_image_edit.handle,
+        generation_handler: Callable[[dict[str, Any]], dict[str, Any]] = _default_generation_handler,
+        edit_handler: Callable[[dict[str, Any]], dict[str, Any]] = _default_edit_handler,
         retention_days_getter: Callable[[], int] | None = None,
     ):
         self.path = path
@@ -96,18 +118,18 @@ class ImageTaskService:
         client_task_id: str,
         prompt: str,
         model: str,
+        n: int,
         size: str | None,
         base_url: str,
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
             "model": model,
-            "n": 1,
+            "n": n,
             "size": size,
-            "response_format": "url",
             "base_url": base_url,
         }
-        return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
+        return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload, handler=self.generation_handler)
 
     def submit_edit(
         self,
@@ -116,20 +138,20 @@ class ImageTaskService:
         client_task_id: str,
         prompt: str,
         model: str,
+        n: int,
         size: str | None,
         base_url: str,
-        images: list[tuple[bytes, str, str]],
+        images: list[UpstreamImageInput],
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
-            "images": images,
             "model": model,
-            "n": 1,
+            "n": n,
             "size": size,
-            "response_format": "url",
             "base_url": base_url,
+            "images": images,
         }
-        return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload)
+        return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload, handler=self.edit_handler)
 
     def list_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
         owner = _owner_id(identity)
@@ -146,11 +168,7 @@ class ImageTaskService:
                 else:
                     items.append(_public_task(task))
             if not requested_ids:
-                items = [
-                    _public_task(task)
-                    for task in self._tasks.values()
-                    if task.get("owner_id") == owner
-                ]
+                items = [_public_task(task) for task in self._tasks.values() if task.get("owner_id") == owner]
                 items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
                 missing_ids = []
             return {"items": items, "missing_ids": missing_ids}
@@ -162,6 +180,7 @@ class ImageTaskService:
         client_task_id: str,
         mode: str,
         payload: dict[str, Any],
+        handler: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> dict[str, Any]:
         task_id = _clean(client_task_id)
         if not task_id:
@@ -169,7 +188,6 @@ class ImageTaskService:
         owner = _owner_id(identity)
         key = _task_key(owner, task_id)
         now = _now_iso()
-        should_start = False
         with self._lock:
             cleaned = self._cleanup_locked()
             task = self._tasks.get(key)
@@ -182,32 +200,23 @@ class ImageTaskService:
                 "owner_id": owner,
                 "status": TASK_STATUS_QUEUED,
                 "mode": mode,
-                "model": _clean(payload.get("model"), "gpt-image-2"),
+                "model": _clean(payload.get("model"), SUPPORTED_IMAGE_MODEL),
                 "size": _clean(payload.get("size")),
                 "created_at": now,
                 "updated_at": now,
             }
             self._tasks[key] = task
             self._save_locked()
-            should_start = True
-
-        if should_start:
-            thread = threading.Thread(
-                target=self._run_task,
-                args=(key, mode, payload),
-                name=f"image-task-{task_id[:16]}",
-                daemon=True,
-            )
-            thread.start()
+        thread = threading.Thread(target=self._run_task, args=(key, handler, payload), name=f"image-task-{task_id[:16]}", daemon=True)
+        thread.start()
         return _public_task(task)
 
-    def _run_task(self, key: str, mode: str, payload: dict[str, Any]) -> None:
+    def _run_task(self, key: str, handler: Callable[[dict[str, Any]], dict[str, Any]], payload: dict[str, Any]) -> None:
         self._update_task(key, status=TASK_STATUS_RUNNING, error="")
         try:
-            handler = self.edit_handler if mode == "edit" else self.generation_handler
             result = handler(payload)
             if not isinstance(result, dict):
-                raise RuntimeError("image task returned streaming result unexpectedly")
+                raise RuntimeError("image task returned invalid payload")
             data = result.get("data")
             if not isinstance(data, list) or not data:
                 message = _clean(result.get("message")) or "image task returned no image data"
@@ -250,8 +259,8 @@ class ImageTaskService:
                 "id": task_id,
                 "owner_id": owner,
                 "status": status,
-                "mode": "edit" if item.get("mode") == "edit" else "generate",
-                "model": _clean(item.get("model"), "gpt-image-2"),
+                "mode": _clean(item.get("mode"), "generate") or "generate",
+                "model": _clean(item.get("model"), SUPPORTED_IMAGE_MODEL),
                 "size": _clean(item.get("size")),
                 "created_at": _clean(item.get("created_at"), _now_iso()),
                 "updated_at": _clean(item.get("updated_at"), _clean(item.get("created_at"), _now_iso())),

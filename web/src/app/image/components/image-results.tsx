@@ -98,9 +98,8 @@ export function ImageResults({
               <div className="max-w-[90%] px-1 py-1 text-[14px] leading-6 text-stone-900 sm:max-w-[82%] sm:text-[15px] sm:leading-7">
                 <div className="mb-1.5 flex flex-wrap justify-end gap-2 text-[11px] text-stone-400 sm:mb-2">
                   <span>第 {turnIndex + 1} 轮</span>
-                  <span>
-                    {turn.mode === "edit" ? "编辑图" : "文生图"}
-                  </span>
+                  <span>{turn.mode === "edit" ? "编辑图" : "文生图"}</span>
+                  <span>{turn.size || "未指定尺寸"}</span>
                   <span>{getTurnStatusLabel(turn.status)}</span>
                   <span>{formatConversationTime(turn.createdAt)}</span>
                 </div>
@@ -147,7 +146,7 @@ export function ImageResults({
                   <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
                   <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
                   {turn.status === "queued" ? (
-                    <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">等待当前对话中的前序任务完成</span>
+                    <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">等待服务端处理</span>
                   ) : null}
                 </div>
 
@@ -161,10 +160,7 @@ export function ImageResults({
                       const imageMeta = [sizeLabel, dimensions].filter(Boolean).join(" · ");
 
                       return (
-                        <div
-                          key={image.id}
-                          className="break-inside-avoid overflow-hidden"
-                        >
+                        <div key={image.id} className="break-inside-avoid overflow-hidden">
                           <button
                             type="button"
                             onClick={() => onOpenLightbox(successfulTurnImages, currentIndex)}
@@ -208,12 +204,10 @@ export function ImageResults({
                           key={image.id}
                           className={cn(
                             "break-inside-avoid overflow-hidden rounded-2xl border border-rose-200 bg-rose-50 sm:rounded-none",
-                            turn.size === "1:1" && "sm:aspect-square",
-                            turn.size === "16:9" && "sm:aspect-video",
-                            turn.size === "9:16" && "sm:aspect-[9/16]",
-                            turn.size === "4:3" && "sm:aspect-[4/3]",
-                            turn.size === "3:4" && "sm:aspect-[3/4]",
-                            !["1:1", "16:9", "9:16", "4:3", "3:4"].includes(turn.size) && "sm:aspect-square",
+                            turn.size === "1024x1024" && "sm:aspect-square",
+                            turn.size === "1536x1024" && "sm:aspect-[3/2]",
+                            turn.size === "1024x1536" && "sm:aspect-[2/3]",
+                            !["1024x1024", "1536x1024", "1024x1536"].includes(turn.size) && "sm:aspect-square",
                           )}
                         >
                           <div className="flex h-full min-h-16 items-center justify-center px-4 py-4 text-center text-sm leading-6 text-rose-600 sm:px-6 sm:py-8">
@@ -228,12 +222,10 @@ export function ImageResults({
                         key={image.id}
                         className={cn(
                           "break-inside-avoid overflow-hidden border border-stone-200/80 bg-stone-100/80",
-                          turn.size === "1:1" && "aspect-square",
-                          turn.size === "16:9" && "aspect-video",
-                          turn.size === "9:16" && "aspect-[9/16]",
-                          turn.size === "4:3" && "aspect-[4/3]",
-                          turn.size === "3:4" && "aspect-[3/4]",
-                          !["1:1", "16:9", "9:16", "4:3", "3:4"].includes(turn.size) && "aspect-square",
+                          turn.size === "1024x1024" && "aspect-square",
+                          turn.size === "1536x1024" && "aspect-[3/2]",
+                          turn.size === "1024x1536" && "aspect-[2/3]",
+                          !["1024x1024", "1536x1024", "1024x1536"].includes(turn.size) && "aspect-square",
                         )}
                       >
                         <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-8 text-center text-stone-500">
@@ -244,7 +236,7 @@ export function ImageResults({
                               <LoaderCircle className="size-5 animate-spin" />
                             )}
                           </div>
-                          <p className="text-sm">{turn.status === "queued" ? "已加入当前对话队列..." : "正在处理图片..."}</p>
+                          <p className="text-sm">{turn.status === "queued" ? "等待处理图片..." : "正在处理图片..."}</p>
                         </div>
                       </div>
                     );

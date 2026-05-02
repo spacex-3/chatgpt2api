@@ -26,6 +26,7 @@ export type ImageTurnStatus = "queued" | "generating" | "success" | "error";
 
 export type ImageTurn = {
   id: string;
+  taskId?: string;
   prompt: string;
   model: ImageModel;
   mode: ImageConversationMode;
@@ -59,12 +60,16 @@ const imageConversationStorage = localforage.createInstance({
 const IMAGE_CONVERSATIONS_KEY = "items";
 let imageConversationWriteQueue: Promise<void> = Promise.resolve();
 
-function normalizeStoredImage(image: StoredImage): StoredImage {
+function clampImageCount(value: unknown) {
+  return Math.min(10, Math.max(1, Math.floor(Number(value) || 1)));
+}
+
+function normalizeStoredImage(image: StoredImage & Record<string, unknown>): StoredImage {
   const normalized = {
     ...image,
     taskId: typeof image.taskId === "string" && image.taskId ? image.taskId : undefined,
     url: typeof image.url === "string" && image.url ? image.url : undefined,
-    revised_prompt: typeof image.revised_prompt === "string" ? image.revised_prompt : undefined,
+    revised_prompt: typeof image.revised_prompt === "string" && image.revised_prompt ? image.revised_prompt : undefined,
   };
   if (image.status === "loading" || image.status === "error" || image.status === "success") {
     return normalized;
@@ -117,22 +122,32 @@ function getLegacyReferenceImages(source: Record<string, unknown>): StoredRefere
   return [];
 }
 
+function deriveTaskId(turn: Record<string, unknown>, images: StoredImage[]): string | undefined {
+  if (typeof turn.taskId === "string" && turn.taskId) {
+    return turn.taskId;
+  }
+  const taskIds = Array.from(new Set(images.map((image) => image.taskId).filter(Boolean)));
+  return taskIds.length === 1 ? String(taskIds[0]) : undefined;
+}
+
 function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
-  const normalizedImages = Array.isArray(turn.images) ? turn.images.map(normalizeStoredImage) : [];
+  const normalizedImages = Array.isArray(turn.images) ? turn.images.map((image) => normalizeStoredImage(image as StoredImage & Record<string, unknown>)) : [];
   const derivedStatus: ImageTurnStatus =
     normalizedImages.some((image) => image.status === "loading")
       ? "generating"
       : normalizedImages.some((image) => image.status === "error")
         ? "error"
         : "success";
+  const count = clampImageCount(turn.count || normalizedImages.length || 1);
 
   return {
     id: String(turn.id || `${Date.now()}`),
+    taskId: deriveTaskId(turn, normalizedImages),
     prompt: String(turn.prompt || ""),
-    model: (turn.model as ImageModel) || "gpt-image-2",
+    model: "gpt-image-2",
     mode: turn.mode === "edit" ? "edit" : "generate",
     referenceImages: getLegacyReferenceImages(turn),
-    count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
+    count,
     size: typeof turn.size === "string" ? turn.size : "",
     images: normalizedImages,
     createdAt: String(turn.createdAt || new Date().toISOString()),
@@ -153,8 +168,9 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
     : [
         normalizeTurn({
           id: String(conversation.id || `${Date.now()}`),
+          taskId: typeof conversation.taskId === "string" ? conversation.taskId : undefined,
           prompt: String(conversation.prompt || ""),
-          model: (conversation.model as ImageModel) || "gpt-image-2",
+          model: "gpt-image-2",
           mode: conversation.mode === "edit" ? "edit" : "generate",
           referenceImages: getLegacyReferenceImages(conversation),
           count: Number(conversation.count || 1),
@@ -162,7 +178,7 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
           images: Array.isArray(conversation.images) ? (conversation.images as StoredImage[]) : [],
           createdAt: String(conversation.createdAt || new Date().toISOString()),
           status:
-            conversation.status === "generating" || conversation.status === "success" || conversation.status === "error"
+            conversation.status === "queued" || conversation.status === "generating" || conversation.status === "success" || conversation.status === "error"
               ? conversation.status
               : "success",
           error: typeof conversation.error === "string" ? conversation.error : undefined,
@@ -258,19 +274,16 @@ export async function clearImageConversations(): Promise<void> {
   });
 }
 
-export function getImageConversationStats(conversation: ImageConversation | null): ImageConversationStats {
-  if (!conversation) {
-    return { queued: 0, running: 0 };
-  }
-
+export function getImageConversationStats(conversation: ImageConversation): ImageConversationStats {
   return conversation.turns.reduce(
-    (acc, turn) => {
+    (stats, turn) => {
       if (turn.status === "queued") {
-        acc.queued += 1;
-      } else if (turn.status === "generating") {
-        acc.running += 1;
+        stats.queued += 1;
       }
-      return acc;
+      if (turn.status === "generating") {
+        stats.running += 1;
+      }
+      return stats;
     },
     { queued: 0, running: 0 },
   );

@@ -1,32 +1,53 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from api.support import require_identity, resolve_image_base_url
 from services.image_task_service import image_task_service
+from services.upstream_openai_image_client import UpstreamImageInput
+
+SUPPORTED_IMAGE_MODEL = "gpt-image-2"
+ALLOWED_IMAGE_SIZES = ("auto", "1024x1024", "1536x1024", "1024x1536")
 
 
 class ImageGenerationTaskRequest(BaseModel):
     client_task_id: str = Field(..., min_length=1)
     prompt: str = Field(..., min_length=1)
-    model: str = "gpt-image-2"
-    size: str | None = None
+    model: Literal["gpt-image-2"] = SUPPORTED_IMAGE_MODEL
+    n: int = Field(default=1, ge=1, le=10)
+    size: Literal["auto", "1024x1024", "1536x1024", "1024x1536"] | None = None
 
 
 def _parse_task_ids(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _parse_n_or_raise(value: object) -> int:
+    try:
+        normalized = int(value or 1)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail={"error": "n must be an integer"}) from exc
+    if normalized < 1 or normalized > 10:
+        raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 10"})
+    return normalized
+
+
+def _parse_edit_uploads_or_raise(image: list[UploadFile] | None, image_list: list[UploadFile] | None) -> list[UploadFile]:
+    uploads = [*(image or []), *(image_list or [])]
+    if not uploads:
+        raise HTTPException(status_code=400, detail={"error": "image file is required"})
+    return uploads
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/image-tasks")
-    async def list_image_tasks(
-        ids: str = Query(default=""),
-        authorization: str | None = Header(default=None),
-    ):
+    async def list_image_tasks(ids: str = Query(default=""), authorization: str | None = Header(default=None)):
         identity = require_identity(authorization)
         return await run_in_threadpool(image_task_service.list_tasks, identity, _parse_task_ids(ids))
 
@@ -44,6 +65,7 @@ def create_router() -> APIRouter:
                 client_task_id=body.client_task_id,
                 prompt=body.prompt,
                 model=body.model,
+                n=body.n,
                 size=body.size,
                 base_url=resolve_image_base_url(request),
             )
@@ -58,19 +80,25 @@ def create_router() -> APIRouter:
         image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
         client_task_id: str = Form(...),
         prompt: str = Form(...),
-        model: str = Form(default="gpt-image-2"),
+        model: str = Form(default=SUPPORTED_IMAGE_MODEL),
+        n: int = Form(default=1),
         size: str | None = Form(default=None),
     ):
         identity = require_identity(authorization)
-        uploads = [*(image or []), *(image_list or [])]
-        if not uploads:
-            raise HTTPException(status_code=400, detail={"error": "image file is required"})
-        images: list[tuple[bytes, str, str]] = []
+        if model != SUPPORTED_IMAGE_MODEL:
+            raise HTTPException(status_code=400, detail={"error": f"model must be {SUPPORTED_IMAGE_MODEL}"})
+        uploads = _parse_edit_uploads_or_raise(image, image_list)
+        parsed_n = _parse_n_or_raise(n)
+        images_payload: list[UpstreamImageInput] = []
         for upload in uploads:
             image_data = await upload.read()
             if not image_data:
                 raise HTTPException(status_code=400, detail={"error": "image file is empty"})
-            images.append((image_data, upload.filename or "image.png", upload.content_type or "image/png"))
+            images_payload.append({
+                "filename": upload.filename or "image.png",
+                "content_type": upload.content_type or "image/png",
+                "data": image_data,
+            })
         try:
             return await run_in_threadpool(
                 image_task_service.submit_edit,
@@ -78,9 +106,10 @@ def create_router() -> APIRouter:
                 client_task_id=client_task_id,
                 prompt=prompt,
                 model=model,
+                n=parsed_n,
                 size=size,
                 base_url=resolve_image_base_url(request),
-                images=images,
+                images=images_payload,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc

@@ -1,15 +1,7 @@
 {
-  "auth-key": "chatgpt2api",
-  "refresh_account_interval_minute": 60,
+  "upstream_api_url": "",
+  "upstream_api_key": "",
   "image_retention_days": 15,
-  "auto_remove_rate_limited_accounts": false,
-  "auto_remove_invalid_accounts": true,
-  "log_levels": [
-    "debug",
-    "error",
-    "info",
-    "warning"
-  ],
   "proxy": "",
   "base_url": ""
 }

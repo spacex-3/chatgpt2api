@@ -2,7 +2,7 @@
 
 import localforage from "localforage";
 
-export type AuthRole = "admin" | "user";
+export type AuthRole = "admin";
 
 export type StoredAuthSession = {
   key: string;
@@ -26,21 +26,20 @@ function normalizeSession(value: unknown, fallbackKey = ""): StoredAuthSession |
 
   const candidate = value as Partial<StoredAuthSession>;
   const key = String(candidate.key || fallbackKey || "").trim();
-  const role = candidate.role === "admin" || candidate.role === "user" ? candidate.role : null;
-  if (!key || !role) {
+  if (!key) {
     return null;
   }
 
   return {
     key,
-    role,
-    subjectId: String(candidate.subjectId || "").trim(),
-    name: String(candidate.name || "").trim(),
+    role: "admin",
+    subjectId: String(candidate.subjectId || "upstream-admin").trim() || "upstream-admin",
+    name: String(candidate.name || "绘图管理员").trim() || "绘图管理员",
   };
 }
 
-export function getDefaultRouteForRole(role: AuthRole) {
-  return role === "admin" ? "/accounts" : "/image";
+export function getDefaultRouteForRole(_role: AuthRole) {
+  return "/image";
 }
 
 export async function getStoredAuthKey() {
@@ -88,15 +87,6 @@ export async function setStoredAuthSession(session: StoredAuthSession) {
   ]);
 }
 
-export async function setStoredAuthKey(authKey: string) {
-  const normalizedAuthKey = String(authKey || "").trim();
-  if (!normalizedAuthKey) {
-    await clearStoredAuthSession();
-    return;
-  }
-  await authStorage.setItem(AUTH_KEY_STORAGE_KEY, normalizedAuthKey);
-}
-
 export async function clearStoredAuthSession() {
   if (typeof window === "undefined") {
     return;
@@ -105,8 +95,4 @@ export async function clearStoredAuthSession() {
     authStorage.removeItem(AUTH_KEY_STORAGE_KEY),
     authStorage.removeItem(AUTH_SESSION_STORAGE_KEY),
   ]);
-}
-
-export async function clearStoredAuthKey() {
-  await clearStoredAuthSession();
 }

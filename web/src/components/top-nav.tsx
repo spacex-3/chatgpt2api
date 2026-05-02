@@ -9,16 +9,10 @@ import webConfig from "@/constants/common-env";
 import { clearStoredAuthSession, getStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 import { cn } from "@/lib/utils";
 
-const adminNavItems = [
-  { href: "/image", label: "画图" },
-  { href: "/accounts", label: "号池管理" },
-  { href: "/register", label: "注册机" },
-  { href: "/image-manager", label: "图片管理" },
-  { href: "/logs", label: "日志管理" },
-  { href: "/settings", label: "设置" },
+const navItems = [
+  { href: "/image", label: "图片工作台" },
+  { href: "/settings", label: "基础设置" },
 ];
-
-const userNavItems = [{ href: "/image", label: "画图" }];
 
 export function TopNav() {
   const pathname = usePathname();
@@ -59,9 +53,6 @@ export function TopNav() {
     return null;
   }
 
-  const navItems = session.role === "admin" ? adminNavItems : userNavItems;
-  const roleLabel = session.role === "admin" ? "管理员" : "普通用户";
-
   return (
     <header className="border-b border-stone-100/50">
       <div className="flex min-h-12 flex-col gap-1 px-3 py-2 sm:h-12 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-6 sm:py-0">
@@ -70,7 +61,7 @@ export function TopNav() {
             href="/image"
             className="shrink-0 py-1 text-[15px] font-bold tracking-tight text-stone-950 transition hover:text-stone-700"
           >
-            chatgpt2api
+            chatgpt2api image
           </Link>
           <a
             href="https://github.com/basketikun/chatgpt2api"
@@ -112,7 +103,7 @@ export function TopNav() {
         </nav>
         <div className="hidden items-center justify-end gap-2 sm:flex sm:gap-3">
           <span className="hidden rounded-md bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-500 sm:inline-block sm:text-[11px]">
-            {roleLabel}
+            gpt-image-2
           </span>
           <span className="hidden rounded-md bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-500 sm:inline-block sm:text-[11px]">
             v{webConfig.appVersion}

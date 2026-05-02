@@ -12,7 +12,7 @@ type ImageComposerProps = {
   prompt: string;
   imageCount: string;
   imageSize: string;
-  availableQuota: string;
+  modelLabel: string;
   activeTaskCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -30,7 +30,7 @@ export function ImageComposer({
   prompt,
   imageCount,
   imageSize,
-  availableQuota,
+  modelLabel,
   activeTaskCount,
   referenceImages,
   textareaRef,
@@ -53,11 +53,10 @@ export function ImageComposer({
   );
   const imageSizeOptions = [
     { value: "", label: "未指定" },
-    { value: "1:1", label: "1:1 (正方形)" },
-    { value: "16:9", label: "16:9 (横版)" },
-    { value: "4:3", label: "4:3 (横版)" },
-    { value: "3:4", label: "3:4 (竖版)" },
-    { value: "9:16", label: "9:16 (竖版)" },
+    { value: "auto", label: "auto (自动)" },
+    { value: "1024x1024", label: "1024×1024" },
+    { value: "1536x1024", label: "1536×1024" },
+    { value: "1024x1536", label: "1024×1536" },
   ];
   const imageSizeLabel = imageSizeOptions.find((option) => option.value === imageSize)?.label || "未指定";
 
@@ -165,7 +164,7 @@ export function ImageComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[82px] resize-none rounded-[24px] border-0 bg-transparent px-4 pt-4 pb-2 text-[15px] leading-6 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[148px] sm:rounded-[32px] sm:px-6 sm:pt-6 sm:pb-20 sm:leading-7"
+              className="min-h-[82px] resize-none rounded-[24px] border-0 bg-transparent px-4 pb-2 pt-4 text-[15px] leading-6 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[148px] sm:rounded-[32px] sm:px-6 sm:pb-20 sm:pt-6 sm:leading-7"
             />
 
             <div className="border-t border-stone-100 bg-white px-3 pb-3 pt-2 sm:absolute sm:inset-x-0 sm:bottom-0 sm:border-t-0 sm:bg-gradient-to-t sm:from-white sm:via-white/95 sm:to-transparent sm:px-6 sm:pb-4 sm:pt-6" onClick={(event) => event.stopPropagation()}>
@@ -181,7 +180,7 @@ export function ImageComposer({
                     <span>{referenceImages.length > 0 ? "添加参考图" : "上传"}</span>
                   </Button>
                   <div className="shrink-0 rounded-full bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-600 sm:px-3 sm:py-2 sm:text-xs">
-                    <span className="hidden sm:inline">剩余额度 </span>{availableQuota}
+                    <span className="hidden sm:inline">固定模型 </span>{modelLabel}
                   </div>
                   {activeTaskCount > 0 && (
                     <div className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700 sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs">
@@ -190,12 +189,12 @@ export function ImageComposer({
                     </div>
                   )}
                   <div className="flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 sm:h-auto sm:gap-2 sm:px-3 sm:py-1">
-                    <span className="text-[11px] font-medium text-stone-700 sm:text-sm">张数</span>
+                    <span className="text-[11px] font-medium text-stone-700 sm:text-sm">张数 1-10</span>
                     <Input
                       type="number"
                       inputMode="numeric"
                       min="1"
-                      max="100"
+                      max="10"
                       step="1"
                       value={imageCount}
                       onChange={(event) => onImageCountChange(event.target.value)}
@@ -206,7 +205,7 @@ export function ImageComposer({
                     ref={sizeMenuRef}
                     className="relative flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 text-[11px] sm:h-auto sm:gap-2 sm:px-3 sm:py-1 sm:text-[13px]"
                   >
-                    <span className="font-medium text-stone-700 sm:text-sm">比例</span>
+                    <span className="font-medium text-stone-700 sm:text-sm">尺寸</span>
                     <button
                       type="button"
                       className="flex h-7 w-[78px] items-center justify-between bg-transparent text-left text-xs font-bold text-stone-700 min-[390px]:w-[96px] sm:h-8 sm:w-[132px]"
@@ -240,7 +239,6 @@ export function ImageComposer({
                       </div>
                     ) : null}
                   </div>
-
                 </div>
 
                 <button
@@ -260,4 +258,3 @@ export function ImageComposer({
     </div>
   );
 }
-
