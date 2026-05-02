@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   getDefaultRouteForRole,
   getStoredAuthSession,
+  sanitizeNextRoute,
   type AuthRole,
   type StoredAuthSession,
 } from "@/store/auth";
@@ -34,7 +35,10 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
       if (!storedSession) {
         setSession(null);
         setIsCheckingAuth(false);
-        router.replace("/login");
+        const nextPath = typeof window !== "undefined"
+          ? sanitizeNextRoute(`${window.location.pathname}${window.location.search}${window.location.hash}`)
+          : "";
+        router.replace(nextPath ? `/login?next=${encodeURIComponent(nextPath)}` : "/login");
         return;
       }
 
@@ -58,7 +62,7 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
   return { isCheckingAuth, session };
 }
 
-export function useRedirectIfAuthenticated() {
+export function useRedirectIfAuthenticated(redirectPath?: string) {
   const router = useRouter();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
@@ -72,7 +76,7 @@ export function useRedirectIfAuthenticated() {
       }
 
       if (storedSession) {
-        router.replace(getDefaultRouteForRole(storedSession.role));
+        router.replace(sanitizeNextRoute(redirectPath) || getDefaultRouteForRole(storedSession.role));
         return;
       }
 
@@ -83,7 +87,7 @@ export function useRedirectIfAuthenticated() {
     return () => {
       active = false;
     };
-  }, [router]);
+  }, [redirectPath, router]);
 
   return { isCheckingAuth };
 }

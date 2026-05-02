@@ -195,6 +195,23 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
   };
 }
 
+function prepareConversationForStorage(conversation: ImageConversation): ImageConversation {
+  const normalizedConversation = normalizeConversation(conversation as ImageConversation & Record<string, unknown>);
+  return {
+    ...normalizedConversation,
+    turns: normalizedConversation.turns.map((turn) => ({
+      ...turn,
+      images: turn.images.map((image) => {
+        if (!image.b64_json) {
+          return image;
+        }
+        const { b64_json: _b64Json, ...rest } = image;
+        return rest;
+      }),
+    })),
+  };
+}
+
 function sortImageConversations(conversations: ImageConversation[]): ImageConversation[] {
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
@@ -231,15 +248,9 @@ export async function listImageConversations(): Promise<ImageConversation[]> {
 
 export async function saveImageConversations(conversations: ImageConversation[]): Promise<void> {
   await queueImageConversationWrite(async () => {
-    const items = await readStoredImageConversations();
-    const conversationMap = new Map(items.map((item) => [item.id, item]));
-    for (const conversation of conversations.map(normalizeConversation)) {
-      const current = conversationMap.get(conversation.id);
-      conversationMap.set(conversation.id, current ? pickLatestConversation(current, conversation) : conversation);
-    }
     await imageConversationStorage.setItem(
       IMAGE_CONVERSATIONS_KEY,
-      sortImageConversations([...conversationMap.values()]),
+      sortImageConversations(conversations.map(prepareConversationForStorage)),
     );
   });
 }
@@ -247,7 +258,7 @@ export async function saveImageConversations(conversations: ImageConversation[])
 export async function saveImageConversation(conversation: ImageConversation): Promise<void> {
   await queueImageConversationWrite(async () => {
     const items = await readStoredImageConversations();
-    const nextConversation = normalizeConversation(conversation);
+    const nextConversation = prepareConversationForStorage(conversation);
     const current = items.find((item) => item.id === nextConversation.id);
     const persistedConversation = current ? pickLatestConversation(current, nextConversation) : nextConversation;
     const nextItems = sortImageConversations([

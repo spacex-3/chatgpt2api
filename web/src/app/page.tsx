@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-import { getDefaultRouteForRole, getStoredAuthSession } from "@/store/auth";
+import { getDefaultRouteForRole, getStoredAuthSession, sanitizeNextRoute } from "@/store/auth";
 
 export default function HomePage() {
   const router = useRouter();
@@ -16,7 +16,12 @@ export default function HomePage() {
       if (!active) {
         return;
       }
-      router.replace(session ? getDefaultRouteForRole(session.role) : "/login");
+      const queryString = typeof window !== "undefined"
+        ? window.location.search.replace(/^\?/, "")
+        : "";
+      const target = session ? getDefaultRouteForRole(session.role) : "/image";
+      const nextRoute = sanitizeNextRoute(`${target}${queryString ? `?${queryString}` : ""}`);
+      router.replace(session ? nextRoute : `/login?next=${encodeURIComponent(nextRoute || "/image")}`);
     };
 
     void redirect();

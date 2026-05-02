@@ -50,6 +50,31 @@ def _owner_name(identity: dict[str, object]) -> str:
     return _clean(identity.get("name")) or _owner_id(identity)
 
 
+def _owner_role(identity: dict[str, object]) -> str:
+    return _clean(identity.get("role"), "user") or "user"
+
+
+def _credential_id(identity: dict[str, object]) -> str:
+    return _clean(identity.get("credential_id")) or _owner_id(identity)
+
+
+def _credential_label(identity: dict[str, object]) -> str:
+    return _clean(identity.get("credential_label")) or _owner_name(identity)
+
+
+def _safe_credential_label(value: object) -> str:
+    normalized = _clean(value)
+    if not normalized:
+        return ""
+    if " · " in normalized:
+        host, suffix = normalized.rsplit(" · ", 1)
+        safe_suffix = suffix[-4:] if len(suffix) >= 4 else ("key" if suffix else "anon")
+        return f"{host} · {safe_suffix}"
+    if normalized.startswith("sk-"):
+        return f"sk-...{normalized[-4:]}" if len(normalized) > 7 else "••••"
+    return normalized
+
+
 def _task_key(owner_id: str, task_id: str) -> str:
     return f"{owner_id}:{task_id}"
 
@@ -73,6 +98,9 @@ def _public_task(task: dict[str, Any], *, include_owner: bool = False, include_d
     if include_owner:
         item["owner_id"] = task.get("owner_id")
         item["owner_name"] = task.get("owner_name")
+        item["owner_role"] = task.get("owner_role") or "user"
+        item["credential_id"] = task.get("credential_id") or task.get("owner_id")
+        item["credential_label"] = _safe_credential_label(task.get("credential_label") or task.get("owner_name"))
     if include_data and task.get("data") is not None:
         item["data"] = task.get("data")
     if task.get("error"):
@@ -81,7 +109,10 @@ def _public_task(task: dict[str, Any], *, include_owner: bool = False, include_d
 
 
 def _default_generation_handler(payload: dict[str, Any]) -> dict[str, Any]:
-    return UpstreamOpenAIImageClient().generate(
+    return UpstreamOpenAIImageClient(
+        api_url=str(payload.get("upstream_api_url") or "") or None,
+        api_key=str(payload.get("upstream_api_key") or "") or None,
+    ).generate(
         prompt=str(payload.get("prompt") or ""),
         model=str(payload.get("model") or SUPPORTED_IMAGE_MODEL),
         n=int(payload.get("n") or 1),
@@ -91,7 +122,10 @@ def _default_generation_handler(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _default_edit_handler(payload: dict[str, Any]) -> dict[str, Any]:
-    return UpstreamOpenAIImageClient().edit(
+    return UpstreamOpenAIImageClient(
+        api_url=str(payload.get("upstream_api_url") or "") or None,
+        api_key=str(payload.get("upstream_api_key") or "") or None,
+    ).edit(
         prompt=str(payload.get("prompt") or ""),
         model=str(payload.get("model") or SUPPORTED_IMAGE_MODEL),
         n=int(payload.get("n") or 1),
@@ -143,6 +177,8 @@ class ImageTaskService:
             "n": n,
             "size": size,
             "base_url": base_url,
+            "upstream_api_url": _clean(identity.get("upstream_api_url")),
+            "upstream_api_key": _clean(identity.get("upstream_api_key")),
         }
         return self._submit(
             identity,
@@ -175,6 +211,8 @@ class ImageTaskService:
             "size": size,
             "base_url": base_url,
             "images": images,
+            "upstream_api_url": _clean(identity.get("upstream_api_url")),
+            "upstream_api_key": _clean(identity.get("upstream_api_key")),
         }
         return self._submit(
             identity,
@@ -276,6 +314,9 @@ class ImageTaskService:
                 "id": task_id,
                 "owner_id": owner,
                 "owner_name": _owner_name(identity),
+                "owner_role": _owner_role(identity),
+                "credential_id": _credential_id(identity),
+                "credential_label": _credential_label(identity),
                 "status": TASK_STATUS_QUEUED,
                 "mode": mode,
                 "model": _clean(payload.get("model"), SUPPORTED_IMAGE_MODEL),
@@ -341,6 +382,9 @@ class ImageTaskService:
                 "id": task_id,
                 "owner_id": owner,
                 "owner_name": _clean(item.get("owner_name"), owner),
+                "owner_role": _clean(item.get("owner_role"), "user") or "user",
+                "credential_id": _clean(item.get("credential_id")) or owner,
+                "credential_label": _clean(item.get("credential_label")) or _clean(item.get("owner_name"), owner),
                 "status": status,
                 "mode": _clean(item.get("mode"), "generate") or "generate",
                 "model": _clean(item.get("model"), SUPPORTED_IMAGE_MODEL),

@@ -9,9 +9,13 @@ import webConfig from "@/constants/common-env";
 import { clearStoredAuthSession, getStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 import { cn } from "@/lib/utils";
 
-const navItems = [
+const baseNavItems = [
   { href: "/image", label: "图片工作台" },
   { href: "/settings", label: "基础设置" },
+];
+
+const adminNavItems = [
+  ...baseNavItems,
   { href: "/admin", label: "管理记录" },
 ];
 
@@ -53,6 +57,8 @@ export function TopNav() {
   if (pathname === "/login" || session === undefined || !session) {
     return null;
   }
+
+  const navItems = session.role === "admin" ? adminNavItems : baseNavItems;
 
   return (
     <header className="border-b border-stone-100/50">
@@ -103,6 +109,9 @@ export function TopNav() {
           })}
         </nav>
         <div className="hidden items-center justify-end gap-2 sm:flex sm:gap-3">
+          <span className="hidden rounded-md bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-500 sm:inline-block sm:text-[11px]">
+            {session.role === "admin" ? "admin" : "user"}
+          </span>
           <span className="hidden rounded-md bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-500 sm:inline-block sm:text-[11px]">
             gpt-image-2
           </span>

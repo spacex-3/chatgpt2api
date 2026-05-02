@@ -13,6 +13,7 @@ services:
     environment:
       STORAGE_BACKEND: sqlite
       DATABASE_URL: sqlite:////app/data/accounts.db
+      # CHATGPT2API_ADMIN_PASSWORD: change_me
     # 存储后端配置 (可选值: json, sqlite, postgres, git)
     # environment:
     #   STORAGE_BACKEND: json

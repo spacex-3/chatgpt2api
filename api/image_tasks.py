@@ -6,7 +6,7 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.support import require_identity, resolve_image_base_url
+from api.support import require_admin, require_identity, resolve_image_base_url
 from services.image_task_service import image_task_service
 from services.upstream_openai_image_client import UpstreamImageInput
 
@@ -68,9 +68,7 @@ def create_router() -> APIRouter:
 
     @router.get("/api/admin/image-tasks")
     async def list_admin_image_tasks(limit: int = Query(default=200, ge=1, le=1000), authorization: str | None = Header(default=None)):
-        identity = require_identity(authorization)
-        if identity.get("role") != "admin":
-            raise HTTPException(status_code=403, detail={"error": "admin role required"})
+        require_admin(authorization)
         return await run_in_threadpool(image_task_service.list_all_tasks, limit)
 
     @router.post("/api/image-tasks/generations")

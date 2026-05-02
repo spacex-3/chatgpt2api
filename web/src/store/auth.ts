@@ -2,7 +2,7 @@
 
 import localforage from "localforage";
 
-export type AuthRole = "admin";
+export type AuthRole = "admin" | "user";
 
 export type StoredAuthSession = {
   key: string;
@@ -29,17 +29,26 @@ function normalizeSession(value: unknown, fallbackKey = ""): StoredAuthSession |
   if (!key) {
     return null;
   }
+  const role: AuthRole = candidate.role === "user" ? "user" : "admin";
 
   return {
     key,
-    role: "admin",
+    role,
     subjectId: String(candidate.subjectId || "upstream-admin").trim() || "upstream-admin",
-    name: String(candidate.name || "绘图管理员").trim() || "绘图管理员",
+    name: String(candidate.name || (role === "admin" ? "系统管理员" : "图片用户")).trim() || (role === "admin" ? "系统管理员" : "图片用户"),
   };
 }
 
-export function getDefaultRouteForRole(_role: AuthRole) {
-  return "/image";
+export function getDefaultRouteForRole(role: AuthRole) {
+  return role === "admin" ? "/admin" : "/image";
+}
+
+export function sanitizeNextRoute(value: string | null | undefined) {
+  const normalized = String(value || "").trim();
+  if (!normalized.startsWith("/") || normalized.startsWith("//") || normalized.startsWith("/login")) {
+    return "";
+  }
+  return normalized;
 }
 
 export async function getStoredAuthKey() {

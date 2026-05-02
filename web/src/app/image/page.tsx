@@ -25,6 +25,7 @@ import {
   fetchImageTasks,
   type ImageTask,
 } from "@/lib/api";
+import { useLinkTemplatePlaceholders } from "@/lib/use-link-template-placeholders";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import {
   clearImageConversations,
@@ -43,6 +44,8 @@ import {
 const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
 const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
 const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
+const NEW_TASK_MISSING_GRACE_MS = 15000;
+const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 160;
 
 function clampImageCount(value: string) {
   return String(Math.min(10, Math.max(1, Math.floor(Number(value) || 1))));
@@ -67,6 +70,11 @@ function formatConversationTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function getTimestamp(value: string) {
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
 }
 
 function createId() {
@@ -236,6 +244,17 @@ function markTurnError(turn: ImageTurn, message: string): ImageTurn {
   };
 }
 
+function shouldKeepPendingTurnWhileTaskPropagates(turn: ImageTurn) {
+  if (turn.status !== "queued" && turn.status !== "generating") {
+    return false;
+  }
+  const createdAt = getTimestamp(turn.createdAt);
+  if (!createdAt) {
+    return false;
+  }
+  return Date.now() - createdAt < NEW_TASK_MISSING_GRACE_MS;
+}
+
 function collectPendingTaskIds(conversations: ImageConversation[]) {
   return Array.from(
     new Set(
@@ -353,6 +372,9 @@ function applyTaskUpdates(conversations: ImageConversation[], tasks: ImageTask[]
         return nextTurn;
       }
       if (missingIdSet.has(taskId)) {
+        if (shouldKeepPendingTurnWhileTaskPropagates(turn)) {
+          return turn;
+        }
         const nextTurn = markTurnError(turn, "未找到对应图片任务，可能已过期或被清理");
         conversationChanged = true;
         return nextTurn;
@@ -421,6 +443,14 @@ function ImagePageContent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isSyncingRef = useRef(false);
   const isHydratingConversationRef = useRef(false);
+  const pendingHydrationSignatureRef = useRef("");
+  const submittingTaskIdsRef = useRef(new Set<string>());
+  const isViewportNearBottomRef = useRef(true);
+  const lastScrollStateRef = useRef<{ signature: string; conversationId: string | null; turnCount: number }>({
+    signature: "",
+    conversationId: null,
+    turnCount: 0,
+  });
 
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
@@ -430,7 +460,9 @@ function ImagePageContent() {
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [visibleHydrationTaskIds, setVisibleHydrationTaskIds] = useState<string[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [hydrationRetryTick, setHydrationRetryTick] = useState(0);
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -457,6 +489,38 @@ function ImagePageContent() {
         ? "确认删除这条图片对话吗？删除后无法恢复。"
         : "";
   const pendingTaskSignature = useMemo(() => collectPendingTaskIds(conversations).sort().join(","), [conversations]);
+  const visibleHydrationTaskIdSignature = useMemo(
+    () => [...visibleHydrationTaskIds].sort().join(","),
+    [visibleHydrationTaskIds],
+  );
+  const selectedVisibleHydrationTaskIds = useMemo(() => {
+    if (!selectedConversation || !visibleHydrationTaskIdSignature) {
+      return [];
+    }
+    const visibleTaskIdSet = new Set(visibleHydrationTaskIds);
+    return collectConversationHydrationTaskIds(selectedConversation)
+      .filter((taskId) => visibleTaskIdSet.has(taskId));
+  }, [selectedConversation, visibleHydrationTaskIdSignature, visibleHydrationTaskIds]);
+  const selectedVisibleHydrationTaskSignature = useMemo(
+    () => [...selectedVisibleHydrationTaskIds].sort().join(","),
+    [selectedVisibleHydrationTaskIds],
+  );
+  const selectedConversationScrollSignature = useMemo(() => {
+    if (!selectedConversation) {
+      return "";
+    }
+    const lastTurn = selectedConversation.turns[selectedConversation.turns.length - 1];
+    return [
+      selectedConversation.id,
+      selectedConversation.turns.length,
+      lastTurn?.id || "",
+      lastTurn?.status || "",
+      lastTurn?.images.length || 0,
+      lastTurn?.images.filter((image) => image.status === "success").length || 0,
+      lastTurn?.images.filter((image) => Boolean(image.b64_json || image.url)).length || 0,
+      lastTurn?.error || "",
+    ].join("|");
+  }, [selectedConversation]);
 
   useEffect(() => {
     conversationsRef.current = conversations;
@@ -472,7 +536,8 @@ function ImagePageContent() {
     if (isSyncingRef.current) {
       return;
     }
-    const pendingTaskIds = collectPendingTaskIds(conversationsRef.current);
+    const pendingTaskIds = collectPendingTaskIds(conversationsRef.current)
+      .filter((taskId) => !submittingTaskIdsRef.current.has(taskId));
     if (pendingTaskIds.length === 0) {
       return;
     }
@@ -550,15 +615,27 @@ function ImagePageContent() {
     };
   }, [pendingTaskSignature, syncPendingTasks]);
 
+  const markHydrationTaskVisible = useCallback((taskId: string) => {
+    const normalizedTaskId = taskId.trim();
+    if (!normalizedTaskId) {
+      return;
+    }
+    setVisibleHydrationTaskIds((current) => (current.includes(normalizedTaskId) ? current : [...current, normalizedTaskId]));
+  }, []);
+
   useEffect(() => {
-    const taskIds = collectConversationHydrationTaskIds(selectedConversation);
-    if (taskIds.length === 0 || isHydratingConversationRef.current) {
+    pendingHydrationSignatureRef.current = selectedVisibleHydrationTaskSignature;
+  }, [selectedVisibleHydrationTaskSignature]);
+
+  useEffect(() => {
+    if (selectedVisibleHydrationTaskIds.length === 0 || isHydratingConversationRef.current) {
       return;
     }
     isHydratingConversationRef.current = true;
+    const startedSignature = selectedVisibleHydrationTaskSignature;
     void (async () => {
       try {
-        const taskList = await fetchImageTasks(taskIds);
+        const taskList = await fetchImageTasks(selectedVisibleHydrationTaskIds);
         const { items, changed } = applyTaskUpdates(conversationsRef.current, taskList.items, taskList.missing_ids);
         if (changed) {
           replaceConversations(items);
@@ -568,19 +645,69 @@ function ImagePageContent() {
         // ignore and retry when user revisits the conversation
       } finally {
         isHydratingConversationRef.current = false;
+        if (
+          pendingHydrationSignatureRef.current
+          && pendingHydrationSignatureRef.current !== startedSignature
+        ) {
+          setHydrationRetryTick((value) => value + 1);
+        }
       }
     })();
-  }, [selectedConversation, replaceConversations]);
+  }, [hydrationRetryTick, replaceConversations, selectedVisibleHydrationTaskIds, selectedVisibleHydrationTaskSignature]);
+
+  useEffect(() => {
+    const viewport = resultsViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const updateIsNearBottom = () => {
+      const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      isViewportNearBottomRef.current = remaining <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
+    };
+    updateIsNearBottom();
+    viewport.addEventListener("scroll", updateIsNearBottom, { passive: true });
+    return () => {
+      viewport.removeEventListener("scroll", updateIsNearBottom);
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedConversation) {
+      lastScrollStateRef.current = { signature: "", conversationId: null, turnCount: 0 };
       return;
     }
-    resultsViewportRef.current?.scrollTo({
-      top: resultsViewportRef.current.scrollHeight,
-      behavior: "smooth",
+    const viewport = resultsViewportRef.current;
+    if (!viewport || !selectedConversationScrollSignature) {
+      return;
+    }
+    const previous = lastScrollStateRef.current;
+    if (previous.signature === selectedConversationScrollSignature) {
+      return;
+    }
+    const switchedConversation = previous.conversationId !== selectedConversation.id;
+    const appendedTurn =
+      previous.conversationId === selectedConversation.id
+      && selectedConversation.turns.length > previous.turnCount;
+    lastScrollStateRef.current = {
+      signature: selectedConversationScrollSignature,
+      conversationId: selectedConversation.id,
+      turnCount: selectedConversation.turns.length,
+    };
+    if (!switchedConversation && !appendedTurn && !isViewportNearBottomRef.current) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      const currentViewport = resultsViewportRef.current;
+      if (!currentViewport) {
+        return;
+      }
+      currentViewport.scrollTo({
+        top: currentViewport.scrollHeight,
+        behavior: switchedConversation || appendedTurn ? "smooth" : "auto",
+      });
+      isViewportNearBottomRef.current = true;
     });
-  }, [selectedConversation?.updatedAt, selectedConversation?.turns.length, selectedConversation]);
+  }, [selectedConversation, selectedConversationScrollSignature]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -845,11 +972,11 @@ function ImagePageContent() {
           turns: [draftTurn],
         };
 
-    setSelectedConversationId(conversationId);
-    clearComposerInputs();
-    await persistConversation(baseConversation);
-
+    submittingTaskIdsRef.current.add(turnId);
     try {
+      setSelectedConversationId(conversationId);
+      clearComposerInputs();
+      await persistConversation(baseConversation);
       const conversationTitle = targetConversation?.title || buildConversationTitle(prompt);
       const task = effectiveImageMode === "edit"
         ? await createImageEditTask(turnId, referenceImageFiles, prompt, parsedCount, imageSize || undefined, conversationId, conversationTitle)
@@ -879,6 +1006,9 @@ function ImagePageContent() {
         };
       });
       toast.error(message);
+    } finally {
+      submittingTaskIdsRef.current.delete(turnId);
+      void syncPendingTasks();
     }
   }, [imagePrompt, referenceImageFiles, selectedConversationId, referenceImages, parsedCount, imageSize, clearComposerInputs, persistConversation, updateConversation, syncPendingTasks]);
 
@@ -955,8 +1085,10 @@ function ImagePageContent() {
           <div ref={resultsViewportRef} className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-1 py-2 sm:px-4 sm:py-4">
             <ImageResults
               selectedConversation={selectedConversation}
+              viewportRef={resultsViewportRef}
               onOpenLightbox={openLightbox}
               onContinueEdit={handleContinueEdit}
+              onHydrateTaskVisible={markHydrationTaskVisible}
               formatConversationTime={formatConversationTime}
             />
           </div>
@@ -1015,6 +1147,7 @@ function ImagePageContent() {
 
 export default function ImagePage() {
   const { isCheckingAuth, session } = useAuthGuard();
+  useLinkTemplatePlaceholders(session);
 
   if (isCheckingAuth || !session) {
     return (

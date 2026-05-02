@@ -1,11 +1,14 @@
 import { httpRequest } from "@/lib/request";
 
 export type ImageModel = "gpt-image-2";
-export type AuthRole = "admin";
+export type AuthRole = "admin" | "user";
+export type SettingsScope = "admin" | "user";
 
 export type SettingsConfig = {
   upstream_api_url: string;
   upstream_api_key: string;
+  upstream_api_key_masked?: string;
+  upstream_api_key_configured?: boolean;
   proxy: string;
   base_url?: string;
   image_retention_days?: number | string;
@@ -26,6 +29,9 @@ export type ImageTask = {
   conversation_title?: string;
   owner_id?: string;
   owner_name?: string;
+  owner_role?: AuthRole;
+  credential_id?: string;
+  credential_label?: string;
   created_at: string;
   updated_at: string;
   result_count?: number;
@@ -50,6 +56,8 @@ export type LoginResponse = {
 
 export type SettingsResponse = {
   config: SettingsConfig;
+  role?: AuthRole;
+  scope?: SettingsScope;
   subject_id?: string;
   name?: string;
   session_token?: string;
@@ -61,6 +69,16 @@ export async function login(upstreamApiUrl: string, upstreamApiKey: string) {
     body: {
       upstream_api_url: String(upstreamApiUrl || "").trim(),
       upstream_api_key: String(upstreamApiKey || "").trim(),
+    },
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function adminLogin(password: string) {
+  return httpRequest<LoginResponse>("/auth/admin/login", {
+    method: "POST",
+    body: {
+      password: String(password || "").trim(),
     },
     redirectOnUnauthorized: false,
   });

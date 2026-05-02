@@ -5,6 +5,7 @@
 - 登录时填写 **上游 API URL** 和 **上游 API Key**
 - 服务端校验这组凭据是否符合 **NewAPI 转出的标准 OpenAI 绘图接口**
 - 登录后由本平台服务端内部调用上游接口生成图片
+- 普通用户与管理员权限分离，管理员需使用 `CHATGPT2API_ADMIN_PASSWORD` 单独登录
 - 固定只保留 `gpt-image-2`
 - 保留平台内的 **文生图 / 参考图 / 编辑图 / 本地历史**
 - 不再对外提供二次 OpenAI 兼容反代接口给第三方客户端调用
@@ -45,16 +46,37 @@ docker compose up -d
 
 ## 首次登录
 
-登录页填写：
+### 普通用户
 
 - 上游 API URL，例如 `https://your-newapi.example.com/v1`
 - 上游 API Key
 
 服务端会先校验上游 `/v1/models` 是否可用，并检查是否可用于 `gpt-image-2`。
 
+普通用户登录后：
+
+- 可访问 `/image`、`/settings`
+- 自己发起的图片任务只使用**自己当前会话**的上游 URL + Key
+- 不会写回或污染管理员的全局配置
+
+### 管理员
+
+管理员通过登录页的“管理员”入口，使用环境变量 `CHATGPT2API_ADMIN_PASSWORD` 登录。
+
+管理员登录后：
+
+- 可访问 `/admin`
+- 可查看全部图片任务记录
+- 可维护全局 `upstream_api_url / upstream_api_key / proxy / base_url / image_retention_days`
+
 ## 基础设置
 
-当前可维护：
+普通用户在 `/settings` 中可维护自己当前会话的：
+
+- `upstream_api_url`
+- `upstream_api_key`
+
+管理员在 `/settings` / `/admin` 中可维护全局：
 
 - `upstream_api_url`
 - `upstream_api_key`
@@ -72,6 +94,12 @@ docker compose up -d
   "proxy": "",
   "base_url": ""
 }
+```
+
+管理员密码不写入 `config.json`，只通过环境变量提供：
+
+```bash
+CHATGPT2API_ADMIN_PASSWORD=change_me
 ```
 
 ## 运行方式说明

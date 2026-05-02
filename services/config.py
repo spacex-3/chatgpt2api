@@ -18,6 +18,17 @@ def _clean(value: object) -> str:
     return str(value or "").strip()
 
 
+def mask_api_key(value: object) -> str:
+    normalized = _clean(value)
+    if not normalized:
+        return ""
+    if normalized.startswith("sk-") and len(normalized) > 7:
+        return f"sk-...{normalized[-4:]}"
+    if len(normalized) > 4:
+        return f"••••{normalized[-4:]}"
+    return "••••"
+
+
 def _normalize_positive_int(value: object, default: int) -> int:
     try:
         return max(1, int(value or default))
@@ -78,6 +89,10 @@ class ConfigStore:
         return _clean(os.getenv("CHATGPT2API_UPSTREAM_API_KEY") or self.data.get("upstream_api_key"))
 
     @property
+    def admin_password(self) -> str:
+        return _clean(os.getenv("CHATGPT2API_ADMIN_PASSWORD"))
+
+    @property
     def proxy(self) -> str:
         return _clean(os.getenv("CHATGPT2API_PROXY") or self.data.get("proxy"))
 
@@ -128,6 +143,15 @@ class ConfigStore:
             "base_url": self.base_url,
             "image_retention_days": self.image_retention_days,
             "model": "gpt-image-2",
+        }
+
+    def get_admin_public(self) -> dict[str, object]:
+        current = self.get()
+        return {
+            **current,
+            "upstream_api_key": "",
+            "upstream_api_key_configured": bool(_clean(current.get("upstream_api_key"))),
+            "upstream_api_key_masked": mask_api_key(current.get("upstream_api_key")),
         }
 
     def get_proxy_settings(self) -> str:

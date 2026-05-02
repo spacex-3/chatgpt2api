@@ -41,10 +41,24 @@ function imageSrc(item: { url?: string; b64_json?: string }) {
   return "";
 }
 
+function formatCredentialFingerprint(value: string | undefined) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  return normalized.length > 18 ? `${normalized.slice(0, 10)}...${normalized.slice(-6)}` : normalized;
+}
+
+function formatOwnerRole(value: string | undefined) {
+  return value === "admin" ? "管理员" : "普通用户";
+}
+
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   return {
     upstream_api_url: String(config.upstream_api_url || ""),
     upstream_api_key: String(config.upstream_api_key || ""),
+    upstream_api_key_masked: String(config.upstream_api_key_masked || ""),
+    upstream_api_key_configured: Boolean(config.upstream_api_key_configured),
     proxy: String(config.proxy || ""),
     base_url: String(config.base_url || ""),
     image_retention_days: Number(config.image_retention_days || 30),
@@ -84,6 +98,11 @@ function AdminPageContent() {
     error: tasks.filter((item) => item.status === "error").length,
     running: tasks.filter((item) => item.status === "queued" || item.status === "running").length,
   }), [tasks]);
+  const adminApiKeyHint = String(config?.upstream_api_key || "").trim()
+    ? "已输入新的 API Key，保存后会替换当前已配置值。"
+    : config?.upstream_api_key_configured
+      ? `当前已配置 ${config.upstream_api_key_masked || "API Key"}；留空则保持原值。`
+      : "当前未配置；请输入可用的 API Key。";
 
   const save = useCallback(async () => {
     if (!config) {
@@ -164,6 +183,7 @@ function AdminPageContent() {
               placeholder="sk-..."
               className="h-10 rounded-xl border-stone-200 bg-white"
             />
+            <p className="text-xs text-stone-500">{adminApiKeyHint}</p>
           </div>
           <div className="space-y-2">
             <label className="text-sm text-stone-700">图片访问地址</label>
@@ -208,7 +228,7 @@ function AdminPageContent() {
       <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
         <CardHeader className="flex flex-row items-center justify-between gap-3">
           <CardTitle>最近 200 条图片任务记录</CardTitle>
-          <div className="text-sm text-stone-500">可查看 prompt、状态、图片结果与归属 key</div>
+          <div className="text-sm text-stone-500">可查看 prompt、状态、图片结果与归属凭据摘要</div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -222,12 +242,17 @@ function AdminPageContent() {
               {tasks.map((task) => (
                 <div key={`${task.owner_id || "owner"}:${task.id}`} className="rounded-2xl border border-stone-200 bg-stone-50/70 p-4">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-stone-500">
-                    <span className="font-medium text-stone-800">{task.owner_name || task.owner_id || "unknown"}</span>
+                    <span className="font-medium text-stone-800">{task.credential_label || task.owner_name || "unknown"}</span>
+                    <span>{formatOwnerRole(task.owner_role)}</span>
                     <span>{task.mode === "edit" ? "编辑图" : "文生图"}</span>
                     <span>{task.status}</span>
                     <span>n={task.n || 1}</span>
                     <span>{task.size || "auto"}</span>
                     <span>{formatTime(task.updated_at)}</span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-500">
+                    <span>会话主体：{task.owner_id || "unknown"}</span>
+                    <span>凭据指纹：{formatCredentialFingerprint(task.credential_id || task.owner_id)}</span>
                   </div>
                   <div className="mt-2 text-sm leading-6 text-stone-800 whitespace-pre-wrap">{task.prompt || "(无 prompt)"}</div>
                   {task.error ? <div className="mt-2 text-sm text-red-600">{task.error}</div> : null}

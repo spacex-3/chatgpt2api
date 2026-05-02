@@ -8,8 +8,24 @@ from pathlib import Path
 from services.image_task_service import ImageTaskService
 
 
-OWNER = {"id": "owner-1", "name": "Owner", "role": "admin"}
-OTHER_OWNER = {"id": "owner-2", "name": "Other", "role": "admin"}
+OWNER = {
+    "id": "owner-1",
+    "name": "Owner",
+    "role": "user",
+    "upstream_api_url": "https://upstream-a.example.com/v1",
+    "upstream_api_key": "sk-owner-1234",
+    "credential_id": "cred-owner-1",
+    "credential_label": "upstream-a.example.com · 1234",
+}
+OTHER_OWNER = {
+    "id": "owner-2",
+    "name": "Other",
+    "role": "user",
+    "upstream_api_url": "https://upstream-b.example.com/v1",
+    "upstream_api_key": "sk-other-5678",
+    "credential_id": "cred-owner-2",
+    "credential_label": "upstream-b.example.com · 5678",
+}
 
 
 def wait_for_task(service: ImageTaskService, identity: dict[str, object], task_id: str, status: str, timeout: float = 2.0):
@@ -108,6 +124,53 @@ class ImageTaskServiceTests(unittest.TestCase):
         self.assertEqual(len(result["items"]), 1)
         self.assertEqual(result["items"][0]["owner_id"], "owner-1")
         self.assertEqual(result["items"][0]["owner_name"], "Owner")
+        self.assertEqual(result["items"][0]["owner_role"], "user")
+        self.assertEqual(result["items"][0]["credential_id"], "cred-owner-1")
+        self.assertEqual(result["items"][0]["credential_label"], "upstream-a.example.com · 1234")
+
+    def test_list_all_tasks_sanitizes_short_credential_labels(self):
+        service = self.make_service()
+        short_owner = {
+            **OWNER,
+            "id": "owner-short",
+            "credential_id": "cred-owner-short",
+            "credential_label": "upstream-a.example.com · abc",
+        }
+        service.submit_generation(
+            short_owner,
+            client_task_id="task-1",
+            prompt="cat",
+            model="gpt-image-2",
+            n=1,
+            size=None,
+            base_url="http://local.test",
+        )
+        wait_for_task(service, short_owner, "task-1", "success")
+
+        result = service.list_all_tasks()
+        self.assertEqual(result["items"][0]["credential_label"], "upstream-a.example.com · key")
+
+    def test_submit_generation_uses_identity_upstream_credentials(self):
+        captured_payload: dict[str, object] = {}
+
+        def generation_handler(payload):
+            captured_payload.update(payload)
+            return {"data": [{"url": "http://example.test/1.png"}]}
+
+        service = self.make_service(generation_handler=generation_handler)
+        service.submit_generation(
+            OWNER,
+            client_task_id="task-1",
+            prompt="cat",
+            model="gpt-image-2",
+            n=1,
+            size=None,
+            base_url="http://local.test",
+        )
+        wait_for_task(service, OWNER, "task-1", "success")
+
+        self.assertEqual(captured_payload["upstream_api_url"], OWNER["upstream_api_url"])
+        self.assertEqual(captured_payload["upstream_api_key"], OWNER["upstream_api_key"])
 
     def test_delete_conversation_only_removes_matching_owner_records(self):
         service = self.make_service()

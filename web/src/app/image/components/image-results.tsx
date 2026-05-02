@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Clock3, LoaderCircle, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { Clock3, ImageIcon, LoaderCircle, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,9 +16,26 @@ export type ImageLightboxItem = {
 
 type ImageResultsProps = {
   selectedConversation: ImageConversation | null;
+  viewportRef: RefObject<HTMLDivElement | null>;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
   onContinueEdit: (conversationId: string, image: StoredImage | StoredReferenceImage) => void;
+  onHydrateTaskVisible: (taskId: string) => void;
   formatConversationTime: (value: string) => string;
+};
+
+type HydrationTriggerProps = {
+  taskId: string;
+  viewportRef: RefObject<HTMLDivElement | null>;
+  onVisible: (taskId: string) => void;
+};
+
+type LazyResultPreviewProps = {
+  src: string;
+  alt: string;
+  size: string;
+  viewportRef: RefObject<HTMLDivElement | null>;
+  onClick: () => void;
+  onLoad: (width: number, height: number) => void;
 };
 
 function getStoredImageSrc(image: StoredImage) {
@@ -28,10 +45,147 @@ function getStoredImageSrc(image: StoredImage) {
   return image.url || "";
 }
 
+function getPreviewAspectClass(size: string) {
+  if (size === "1024x1024") {
+    return "aspect-square";
+  }
+  if (size === "1536x1024") {
+    return "aspect-[3/2]";
+  }
+  if (size === "1024x1536") {
+    return "aspect-[2/3]";
+  }
+  return "aspect-square";
+}
+
+function HydrationTrigger({ taskId, viewportRef, onVisible }: HydrationTriggerProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  const triggeredRef = useRef(false);
+
+  useEffect(() => {
+    const target = ref.current;
+    if (!target) {
+      return;
+    }
+    if (triggeredRef.current || typeof IntersectionObserver === "undefined") {
+      if (!triggeredRef.current) {
+        triggeredRef.current = true;
+        onVisible(taskId);
+      }
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) {
+          return;
+        }
+        if (triggeredRef.current) {
+          return;
+        }
+        triggeredRef.current = true;
+        onVisible(taskId);
+        observer.disconnect();
+      },
+      {
+        root: viewportRef.current,
+        rootMargin: "320px 0px",
+        threshold: 0.01,
+      },
+    );
+
+    observer.observe(target);
+    return () => {
+      observer.disconnect();
+    };
+  }, [onVisible, taskId, viewportRef]);
+
+  return <div ref={ref} className="h-px w-full" aria-hidden />;
+}
+
+function LazyResultPreview({
+  src,
+  alt,
+  size,
+  viewportRef,
+  onClick,
+  onLoad,
+}: LazyResultPreviewProps) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const [shouldLoad, setShouldLoad] = useState(false);
+
+  useEffect(() => {
+    const target = ref.current;
+    if (!target || shouldLoad) {
+      return;
+    }
+    if (typeof IntersectionObserver === "undefined") {
+      setShouldLoad(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) {
+          return;
+        }
+        setShouldLoad(true);
+        observer.disconnect();
+      },
+      {
+        root: viewportRef.current,
+        rootMargin: "320px 0px",
+        threshold: 0.01,
+      },
+    );
+
+    observer.observe(target);
+    return () => {
+      observer.disconnect();
+    };
+  }, [shouldLoad, viewportRef]);
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onClick}
+      className="group block w-full cursor-zoom-in"
+      aria-label={alt}
+    >
+      {shouldLoad ? (
+        <img
+          src={src}
+          alt={alt}
+          loading="lazy"
+          className="block h-auto w-full transition duration-200 group-hover:brightness-90"
+          onLoad={(event) => {
+            onLoad(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight);
+          }}
+        />
+      ) : (
+        <div
+          className={cn(
+            "flex items-center justify-center border border-stone-200/80 bg-stone-100/70 text-stone-500",
+            getPreviewAspectClass(size),
+          )}
+        >
+          <div className="flex flex-col items-center gap-2 px-4 py-8 text-center text-xs">
+            <ImageIcon className="size-4" />
+            <span>滚动到此处后加载图片</span>
+          </div>
+        </div>
+      )}
+    </button>
+  );
+}
+
 export function ImageResults({
   selectedConversation,
+  viewportRef,
   onOpenLightbox,
   onContinueEdit,
+  onHydrateTaskVisible,
   formatConversationTime,
 }: ImageResultsProps) {
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
@@ -91,6 +245,10 @@ export function ImageResults({
               ]
             : [];
         });
+        const needsHydration =
+          turn.status === "success"
+          && turn.images.length > 0
+          && turn.images.every((image) => !image.b64_json && !image.url && image.status !== "error");
 
         return (
           <div key={turn.id} className="flex flex-col gap-3 sm:gap-4">
@@ -124,6 +282,7 @@ export function ImageResults({
                             <img
                               src={image.dataUrl}
                               alt={image.name || `参考图 ${index + 1}`}
+                              loading="lazy"
                               className="absolute inset-0 h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
                             />
                           </button>
@@ -148,7 +307,18 @@ export function ImageResults({
                   {turn.status === "queued" ? (
                     <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">等待服务端处理</span>
                   ) : null}
+                  {needsHydration ? (
+                    <span className="rounded-full bg-sky-50 px-3 py-1 text-sky-700">仅在可见区域加载历史图片</span>
+                  ) : null}
                 </div>
+
+                {needsHydration ? (
+                  <HydrationTrigger
+                    taskId={turn.taskId || turn.id}
+                    viewportRef={viewportRef}
+                    onVisible={onHydrateTaskVisible}
+                  />
+                ) : null}
 
                 <div className="columns-1 gap-3 space-y-3 sm:columns-2 sm:gap-4 sm:space-y-4 xl:columns-3">
                   {turn.images.map((image, index) => {
@@ -161,24 +331,14 @@ export function ImageResults({
 
                       return (
                         <div key={image.id} className="break-inside-avoid overflow-hidden">
-                          <button
-                            type="button"
+                          <LazyResultPreview
+                            src={imageSrc}
+                            alt={`Generated result ${index + 1}`}
+                            size={turn.size}
+                            viewportRef={viewportRef}
                             onClick={() => onOpenLightbox(successfulTurnImages, currentIndex)}
-                            className="group block w-full cursor-zoom-in"
-                          >
-                            <img
-                              src={imageSrc}
-                              alt={`Generated result ${index + 1}`}
-                              className="block h-auto w-full transition duration-200 group-hover:brightness-90"
-                              onLoad={(event) => {
-                                updateImageDimensions(
-                                  image.id,
-                                  event.currentTarget.naturalWidth,
-                                  event.currentTarget.naturalHeight,
-                                );
-                              }}
-                            />
-                          </button>
+                            onLoad={(width, height) => updateImageDimensions(image.id, width, height)}
+                          />
                           <div className="flex items-center justify-between gap-2 px-3 py-3">
                             <div className="min-w-0 text-xs text-stone-500">
                               <span>结果 {index + 1}</span>
@@ -240,7 +400,7 @@ export function ImageResults({
                             {turn.status === "queued"
                               ? "等待处理图片..."
                               : turn.status === "success"
-                                ? "正在读取历史图片..."
+                                ? "滚动到此处后读取历史图片..."
                                 : "正在处理图片..."}
                           </p>
                         </div>
