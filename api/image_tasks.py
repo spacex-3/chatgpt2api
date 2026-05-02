@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.support import require_identity, resolve_image_base_url
 from services.image_task_service import image_task_service
@@ -15,11 +15,14 @@ ALLOWED_IMAGE_SIZES = ("auto", "1024x1024", "1536x1024", "1024x1536")
 
 
 class ImageGenerationTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     client_task_id: str = Field(..., min_length=1)
     prompt: str = Field(..., min_length=1)
     model: Literal["gpt-image-2"] = SUPPORTED_IMAGE_MODEL
     n: int = Field(default=1, ge=1, le=10)
     size: Literal["auto", "1024x1024", "1536x1024", "1024x1536"] | None = None
+    conversation_id: str | None = None
+    conversation_title: str | None = None
 
 
 def _parse_task_ids(value: str) -> list[str]:
@@ -51,6 +54,25 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         return await run_in_threadpool(image_task_service.list_tasks, identity, _parse_task_ids(ids))
 
+    @router.delete("/api/image-tasks/history")
+    async def clear_image_tasks(authorization: str | None = Header(default=None)):
+        identity = require_identity(authorization)
+        deleted = await run_in_threadpool(image_task_service.clear_history, identity)
+        return {"ok": True, "deleted": deleted}
+
+    @router.delete("/api/image-tasks/conversations/{conversation_id}")
+    async def delete_image_task_conversation(conversation_id: str, authorization: str | None = Header(default=None)):
+        identity = require_identity(authorization)
+        deleted = await run_in_threadpool(image_task_service.delete_conversation, identity, conversation_id)
+        return {"ok": True, "deleted": deleted}
+
+    @router.get("/api/admin/image-tasks")
+    async def list_admin_image_tasks(limit: int = Query(default=200, ge=1, le=1000), authorization: str | None = Header(default=None)):
+        identity = require_identity(authorization)
+        if identity.get("role") != "admin":
+            raise HTTPException(status_code=403, detail={"error": "admin role required"})
+        return await run_in_threadpool(image_task_service.list_all_tasks, limit)
+
     @router.post("/api/image-tasks/generations")
     async def create_generation_task(
         body: ImageGenerationTaskRequest,
@@ -68,6 +90,8 @@ def create_router() -> APIRouter:
                 n=body.n,
                 size=body.size,
                 base_url=resolve_image_base_url(request),
+                conversation_id=body.conversation_id,
+                conversation_title=body.conversation_title,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
@@ -83,6 +107,8 @@ def create_router() -> APIRouter:
         model: str = Form(default=SUPPORTED_IMAGE_MODEL),
         n: int = Form(default=1),
         size: str | None = Form(default=None),
+        conversation_id: str | None = Form(default=None),
+        conversation_title: str | None = Form(default=None),
     ):
         identity = require_identity(authorization)
         if model != SUPPORTED_IMAGE_MODEL:
@@ -110,6 +136,8 @@ def create_router() -> APIRouter:
                 size=size,
                 base_url=resolve_image_base_url(request),
                 images=images_payload,
+                conversation_id=conversation_id,
+                conversation_title=conversation_title,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc

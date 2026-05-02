@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { toast } from "sonner";
 
 import { fetchSettingsConfig, updateSettingsConfig, type SettingsConfig } from "@/lib/api";
+import { getStoredAuthSession, setStoredAuthSession } from "@/store/auth";
 
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   return {
@@ -62,6 +63,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         image_retention_days: Math.max(1, Number(config.image_retention_days) || 30),
       });
       set({ config: normalizeConfig(data.config) });
+      if (data.session_token && data.subject_id && data.name) {
+        const current = await getStoredAuthSession();
+        if (current) {
+          await setStoredAuthSession({
+            ...current,
+            key: data.session_token,
+            subjectId: data.subject_id,
+            name: data.name,
+          });
+        }
+      }
       toast.success("设置已保存");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "保存设置失败");

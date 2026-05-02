@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.support import require_identity
 from services.config import config
 from services.image_errors import ImageGenerationError
-from services.session_service import session_service
+from services.session_service import build_session_name, build_subject_id, session_service
 from services.upstream_openai_image_client import UpstreamOpenAIImageClient
 
 
@@ -51,6 +51,16 @@ def _validate_upstream_or_raise(api_url: str, api_key: str) -> UpstreamOpenAIIma
         raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
 
+def _build_auth_payload(api_url: str, api_key: str) -> dict[str, str]:
+    subject_id = build_subject_id(api_url, api_key)
+    name = build_session_name(api_url, api_key)
+    return {
+        "subject_id": subject_id,
+        "name": name,
+        "session_token": session_service.create_session(subject_id=subject_id, name=name),
+    }
+
+
 def create_router(app_version: str) -> APIRouter:
     router = APIRouter()
 
@@ -61,13 +71,12 @@ def create_router(app_version: str) -> APIRouter:
             "upstream_api_url": client.api_url,
             "upstream_api_key": body.resolved_api_key(),
         })
+        auth_payload = _build_auth_payload(client.api_url, body.resolved_api_key())
         return {
             "ok": True,
             "version": app_version,
             "role": "admin",
-            "subject_id": "upstream-admin",
-            "name": "绘图管理员",
-            "session_token": session_service.create_session(),
+            **auth_payload,
             "config": saved,
         }
 
@@ -77,8 +86,8 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/api/settings")
     async def get_settings(authorization: str | None = Header(default=None)):
-        require_identity(authorization)
-        return {"config": config.get()}
+        identity = require_identity(authorization)
+        return {"config": config.get(), "subject_id": identity.get("id"), "name": identity.get("name")}
 
     @router.post("/api/settings")
     async def save_settings(body: SettingsUpdateRequest, authorization: str | None = Header(default=None)):
@@ -98,7 +107,10 @@ def create_router(app_version: str) -> APIRouter:
         current_api_url = str(current.get("upstream_api_url") or "").strip()
         current_api_key = str(current.get("upstream_api_key") or "").strip()
         if next_api_url != current_api_url or next_api_key != current_api_key:
-            await run_in_threadpool(_validate_upstream_or_raise, next_api_url, next_api_key)
-        return {"config": config.update(next_values)}
+            validated = await run_in_threadpool(_validate_upstream_or_raise, next_api_url, next_api_key)
+            next_values["upstream_api_url"] = validated.api_url
+        saved = config.update(next_values)
+        auth_payload = _build_auth_payload(str(saved.get("upstream_api_url") or ""), str(saved.get("upstream_api_key") or ""))
+        return {"config": saved, **auth_payload}
 
     return router

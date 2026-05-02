@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { href: "/image", label: "图片工作台" },
   { href: "/settings", label: "基础设置" },
+  { href: "/admin", label: "管理记录" },
 ];
 
 export function TopNav() {

@@ -1,90 +1,72 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import json
-import time
-from typing import Any
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from urllib.parse import urlparse
 
-from services.config import config
-
-
-SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
-DEFAULT_SUBJECT_ID = "upstream-admin"
-DEFAULT_NAME = "绘图管理员"
-DEFAULT_ROLE = "admin"
+from services.config import DATA_DIR
 
 
-def _b64url_encode(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+def _normalize_api_url(value: str) -> str:
+    return str(value or "").strip().rstrip("/")
 
 
-def _b64url_decode(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(value + padding)
+def build_subject_id(api_url: str, api_key: str) -> str:
+    normalized_url = _normalize_api_url(api_url)
+    normalized_key = str(api_key or "").strip()
+    digest = hashlib.sha256(f"{normalized_url}\n{normalized_key}".encode("utf-8")).hexdigest()[:24]
+    return f"upstream-{digest}"
+
+
+def build_session_name(api_url: str, api_key: str) -> str:
+    normalized_url = _normalize_api_url(api_url)
+    normalized_key = str(api_key or "").strip()
+    parsed = urlparse(normalized_url)
+    host = parsed.netloc or parsed.path or "upstream"
+    suffix = normalized_key[-4:] if len(normalized_key) >= 4 else normalized_key or "anon"
+    return f"{host} · {suffix}"
 
 
 class SessionService:
-    def _sign(self, payload: dict[str, Any]) -> str:
-        message = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        secret = config.session_secret.encode("utf-8")
-        signature = hmac.new(secret, message, hashlib.sha256).digest()
-        return f"{_b64url_encode(message)}.{_b64url_encode(signature)}"
+    def __init__(self, secret_path=DATA_DIR / "session_secret.txt"):
+        self.secret_path = secret_path
+        self.secret_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def create_session(
-        self,
-        *,
-        subject_id: str = DEFAULT_SUBJECT_ID,
-        name: str = DEFAULT_NAME,
-        role: str = DEFAULT_ROLE,
-        ttl_seconds: int = SESSION_TTL_SECONDS,
-    ) -> str:
-        now = int(time.time())
-        payload = {
-            "sub": subject_id,
-            "name": name,
-            "role": role,
-            "iat": now,
-            "exp": now + max(60, int(ttl_seconds or SESSION_TTL_SECONDS)),
-        }
-        return self._sign(payload)
+    def _get_secret(self) -> bytes:
+        if self.secret_path.exists():
+            return self.secret_path.read_text(encoding="utf-8").encode("utf-8")
+        digest = hashlib.sha256(str(self.secret_path).encode("utf-8")).hexdigest()
+        self.secret_path.write_text(digest, encoding="utf-8")
+        return digest.encode("utf-8")
 
-    def authenticate(self, token: str) -> dict[str, object] | None:
-        candidate = str(token or "").strip()
-        if not candidate or "." not in candidate:
-            return None
-        encoded_payload, encoded_signature = candidate.rsplit(".", 1)
-        try:
-            payload_bytes = _b64url_decode(encoded_payload)
-            signature_bytes = _b64url_decode(encoded_signature)
-        except Exception:
-            return None
-        expected_signature = hmac.new(
-            config.session_secret.encode("utf-8"),
-            payload_bytes,
-            hashlib.sha256,
-        ).digest()
-        if not hmac.compare_digest(signature_bytes, expected_signature):
+    def create_session(self, *, subject_id: str = "upstream-admin", name: str = "绘图管理员") -> str:
+        payload = json.dumps({
+            "sub": str(subject_id or "upstream-admin").strip() or "upstream-admin",
+            "role": "admin",
+            "name": str(name or "绘图管理员").strip() or "绘图管理员",
+        }, ensure_ascii=False).encode("utf-8")
+        sig = hmac.new(self._get_secret(), payload, "sha256").digest()
+        return urlsafe_b64encode(payload + b"." + sig).decode("utf-8")
+
+    def authenticate(self, token: str):
+        if not token:
             return None
         try:
+            decoded = urlsafe_b64decode(token.encode("utf-8"))
+            payload_bytes, sig = decoded.rsplit(b".", 1)
+            expected = hmac.new(self._get_secret(), payload_bytes, "sha256").digest()
+            if not hmac.compare_digest(sig, expected):
+                return None
             payload = json.loads(payload_bytes.decode("utf-8"))
+            return {
+                "id": str(payload.get("sub") or "upstream-admin"),
+                "role": str(payload.get("role") or "admin"),
+                "name": str(payload.get("name") or "绘图管理员"),
+            }
         except Exception:
             return None
-        if not isinstance(payload, dict):
-            return None
-        try:
-            exp = int(payload.get("exp") or 0)
-        except (TypeError, ValueError):
-            return None
-        if exp <= int(time.time()):
-            return None
-        role = str(payload.get("role") or DEFAULT_ROLE).strip() or DEFAULT_ROLE
-        return {
-            "id": str(payload.get("sub") or DEFAULT_SUBJECT_ID).strip() or DEFAULT_SUBJECT_ID,
-            "name": str(payload.get("name") or DEFAULT_NAME).strip() or DEFAULT_NAME,
-            "role": role,
-        }
 
 
 session_service = SessionService()

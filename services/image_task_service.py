@@ -46,20 +46,31 @@ def _owner_id(identity: dict[str, object]) -> str:
     return _clean(identity.get("id")) or "anonymous"
 
 
+def _owner_name(identity: dict[str, object]) -> str:
+    return _clean(identity.get("name")) or _owner_id(identity)
+
+
 def _task_key(owner_id: str, task_id: str) -> str:
     return f"{owner_id}:{task_id}"
 
 
-def _public_task(task: dict[str, Any]) -> dict[str, Any]:
+def _public_task(task: dict[str, Any], *, include_owner: bool = False) -> dict[str, Any]:
     item = {
         "id": task.get("id"),
         "status": task.get("status"),
         "mode": task.get("mode") or "generate",
         "model": task.get("model"),
         "size": task.get("size"),
+        "n": task.get("n") or 1,
+        "prompt": task.get("prompt") or "",
+        "conversation_id": task.get("conversation_id") or task.get("id"),
+        "conversation_title": task.get("conversation_title") or "",
         "created_at": task.get("created_at"),
         "updated_at": task.get("updated_at"),
     }
+    if include_owner:
+        item["owner_id"] = task.get("owner_id")
+        item["owner_name"] = task.get("owner_name")
     if task.get("data") is not None:
         item["data"] = task.get("data")
     if task.get("error"):
@@ -121,6 +132,8 @@ class ImageTaskService:
         n: int,
         size: str | None,
         base_url: str,
+        conversation_id: str | None = None,
+        conversation_title: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
@@ -129,7 +142,15 @@ class ImageTaskService:
             "size": size,
             "base_url": base_url,
         }
-        return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload, handler=self.generation_handler)
+        return self._submit(
+            identity,
+            client_task_id=client_task_id,
+            mode="generate",
+            payload=payload,
+            handler=self.generation_handler,
+            conversation_id=conversation_id,
+            conversation_title=conversation_title,
+        )
 
     def submit_edit(
         self,
@@ -142,6 +163,8 @@ class ImageTaskService:
         size: str | None,
         base_url: str,
         images: list[UpstreamImageInput],
+        conversation_id: str | None = None,
+        conversation_title: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
@@ -151,7 +174,15 @@ class ImageTaskService:
             "base_url": base_url,
             "images": images,
         }
-        return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload, handler=self.edit_handler)
+        return self._submit(
+            identity,
+            client_task_id=client_task_id,
+            mode="edit",
+            payload=payload,
+            handler=self.edit_handler,
+            conversation_id=conversation_id,
+            conversation_title=conversation_title,
+        )
 
     def list_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
         owner = _owner_id(identity)
@@ -159,8 +190,8 @@ class ImageTaskService:
         with self._lock:
             if self._cleanup_locked():
                 self._save_locked()
-            items = []
-            missing_ids = []
+            items: list[dict[str, Any]] = []
+            missing_ids: list[str] = []
             for task_id in requested_ids:
                 task = self._tasks.get(_task_key(owner, task_id))
                 if task is None:
@@ -173,6 +204,44 @@ class ImageTaskService:
                 missing_ids = []
             return {"items": items, "missing_ids": missing_ids}
 
+    def list_all_tasks(self, limit: int = 200) -> dict[str, Any]:
+        try:
+            safe_limit = max(1, min(int(limit), 1000))
+        except Exception:
+            safe_limit = 200
+        with self._lock:
+            if self._cleanup_locked():
+                self._save_locked()
+            items = [_public_task(task, include_owner=True) for task in self._tasks.values()]
+            items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+            return {"items": items[:safe_limit], "missing_ids": []}
+
+    def delete_conversation(self, identity: dict[str, object], conversation_id: str) -> int:
+        owner = _owner_id(identity)
+        target = _clean(conversation_id)
+        if not target:
+            return 0
+        with self._lock:
+            keys = [
+                key for key, task in self._tasks.items()
+                if task.get("owner_id") == owner and _clean(task.get("conversation_id") or task.get("id")) == target
+            ]
+            for key in keys:
+                self._tasks.pop(key, None)
+            if keys:
+                self._save_locked()
+            return len(keys)
+
+    def clear_history(self, identity: dict[str, object]) -> int:
+        owner = _owner_id(identity)
+        with self._lock:
+            keys = [key for key, task in self._tasks.items() if task.get("owner_id") == owner]
+            for key in keys:
+                self._tasks.pop(key, None)
+            if keys:
+                self._save_locked()
+            return len(keys)
+
     def _submit(
         self,
         identity: dict[str, object],
@@ -181,6 +250,8 @@ class ImageTaskService:
         mode: str,
         payload: dict[str, Any],
         handler: Callable[[dict[str, Any]], dict[str, Any]],
+        conversation_id: str | None,
+        conversation_title: str | None,
     ) -> dict[str, Any]:
         task_id = _clean(client_task_id)
         if not task_id:
@@ -198,10 +269,15 @@ class ImageTaskService:
             task = {
                 "id": task_id,
                 "owner_id": owner,
+                "owner_name": _owner_name(identity),
                 "status": TASK_STATUS_QUEUED,
                 "mode": mode,
                 "model": _clean(payload.get("model"), SUPPORTED_IMAGE_MODEL),
                 "size": _clean(payload.get("size")),
+                "n": int(payload.get("n") or 1),
+                "prompt": _clean(payload.get("prompt")),
+                "conversation_id": _clean(conversation_id) or task_id,
+                "conversation_title": _clean(conversation_title),
                 "created_at": now,
                 "updated_at": now,
             }
@@ -258,10 +334,15 @@ class ImageTaskService:
             task = {
                 "id": task_id,
                 "owner_id": owner,
+                "owner_name": _clean(item.get("owner_name"), owner),
                 "status": status,
                 "mode": _clean(item.get("mode"), "generate") or "generate",
                 "model": _clean(item.get("model"), SUPPORTED_IMAGE_MODEL),
                 "size": _clean(item.get("size")),
+                "n": int(item.get("n") or 1),
+                "prompt": _clean(item.get("prompt")),
+                "conversation_id": _clean(item.get("conversation_id")) or task_id,
+                "conversation_title": _clean(item.get("conversation_title")),
                 "created_at": _clean(item.get("created_at"), _now_iso()),
                 "updated_at": _clean(item.get("updated_at"), _clean(item.get("created_at"), _now_iso())),
             }

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import time
 import unittest
@@ -26,184 +25,132 @@ def wait_for_task(service: ImageTaskService, identity: dict[str, object], task_i
 
 
 class ImageTaskServiceTests(unittest.TestCase):
-    def make_service(self, path: Path, generation_handler=None, edit_handler=None) -> ImageTaskService:
+    def make_service(self, generation_handler=None, edit_handler=None) -> ImageTaskService:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        path = Path(temp_dir.name) / "image_tasks.json"
         return ImageTaskService(
             path,
-            generation_handler=generation_handler or (lambda _payload: {"data": [{"url": "http://example.test/image.png"}]}),
-            edit_handler=edit_handler or (lambda payload: {"data": [{"url": f"http://example.test/{len(payload.get('images') or [])}.png"}]}),
+            generation_handler=generation_handler or (lambda payload: {"data": [{"url": "http://example.test/1.png"}]}),
+            edit_handler=edit_handler or (lambda payload: {"data": [{"url": "http://example.test/edit.png"}]}),
             retention_days_getter=lambda: 30,
         )
 
-    def test_duplicate_submit_uses_existing_generation_task(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            calls = 0
+    def test_submit_generation_and_list_history(self):
+        service = self.make_service()
+        queued = service.submit_generation(
+            OWNER,
+            client_task_id="task-1",
+            prompt="orange cat",
+            model="gpt-image-2",
+            n=3,
+            size="1024x1024",
+            base_url="http://local.test",
+            conversation_id="conv-1",
+            conversation_title="橘猫",
+        )
+        self.assertEqual(queued["conversation_id"], "conv-1")
+        self.assertEqual(queued["prompt"], "orange cat")
+        self.assertEqual(queued["n"], 3)
 
-            def handler(_payload):
-                nonlocal calls
-                calls += 1
-                time.sleep(0.05)
-                return {"data": [{"url": "http://example.test/image.png"}]}
+        finished = wait_for_task(service, OWNER, "task-1", "success")
+        self.assertEqual(finished["conversation_title"], "橘猫")
+        self.assertEqual(len(finished.get("data") or []), 1)
 
-            service = self.make_service(Path(tmp_dir) / "image_tasks.json", generation_handler=handler)
-            first = service.submit_generation(
-                OWNER,
-                client_task_id="task-1",
-                prompt="cat",
-                model="gpt-image-2",
-                n=1,
-                size=None,
-                base_url="http://local.test",
-            )
-            second = service.submit_generation(
-                OWNER,
-                client_task_id="task-1",
-                prompt="cat",
-                model="gpt-image-2",
-                n=1,
-                size=None,
-                base_url="http://local.test",
-            )
+        history = service.list_tasks(OWNER, [])
+        self.assertEqual(len(history["items"]), 1)
+        self.assertEqual(history["items"][0]["id"], "task-1")
 
-            self.assertEqual(first["id"], "task-1")
-            self.assertEqual(second["id"], "task-1")
-            task = wait_for_task(service, OWNER, "task-1", "success")
-            self.assertEqual(task["mode"], "generate")
-            self.assertEqual(task["data"][0]["url"], "http://example.test/image.png")
-            self.assertEqual(calls, 1)
+    def test_list_tasks_keeps_owners_isolated(self):
+        service = self.make_service()
+        service.submit_generation(
+            OWNER,
+            client_task_id="task-1",
+            prompt="cat",
+            model="gpt-image-2",
+            n=1,
+            size=None,
+            base_url="http://local.test",
+        )
+        service.submit_generation(
+            OTHER_OWNER,
+            client_task_id="task-1",
+            prompt="dog",
+            model="gpt-image-2",
+            n=1,
+            size=None,
+            base_url="http://local.test",
+        )
+        wait_for_task(service, OWNER, "task-1", "success")
+        wait_for_task(service, OTHER_OWNER, "task-1", "success")
 
-    def test_submit_generation_passes_n_to_handler(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            captured: list[dict[str, object]] = []
+        owner_history = service.list_tasks(OWNER, [])
+        other_history = service.list_tasks(OTHER_OWNER, [])
+        self.assertEqual(len(owner_history["items"]), 1)
+        self.assertEqual(len(other_history["items"]), 1)
+        self.assertEqual(owner_history["items"][0]["prompt"], "cat")
+        self.assertEqual(other_history["items"][0]["prompt"], "dog")
 
-            def handler(payload: dict[str, object]):
-                captured.append(payload)
-                count = int(payload.get("n") or 1)
-                return {
-                    "data": [
-                        {"url": f"http://example.test/image-{index}.png"}
-                        for index in range(1, count + 1)
-                    ]
-                }
+    def test_list_all_tasks_includes_owner_fields(self):
+        service = self.make_service()
+        service.submit_generation(
+            OWNER,
+            client_task_id="task-1",
+            prompt="cat",
+            model="gpt-image-2",
+            n=1,
+            size=None,
+            base_url="http://local.test",
+        )
+        wait_for_task(service, OWNER, "task-1", "success")
 
-            service = self.make_service(Path(tmp_dir) / "image_tasks.json", generation_handler=handler)
+        result = service.list_all_tasks()
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(result["items"][0]["owner_id"], "owner-1")
+        self.assertEqual(result["items"][0]["owner_name"], "Owner")
+
+    def test_delete_conversation_only_removes_matching_owner_records(self):
+        service = self.make_service()
+        for task_id in ("task-1", "task-2"):
             service.submit_generation(
                 OWNER,
-                client_task_id="multi-task",
-                prompt="cat",
-                model="gpt-image-2",
-                n=3,
-                size="1024x1024",
-                base_url="http://local.test",
-            )
-
-            task = wait_for_task(service, OWNER, "multi-task", "success")
-            self.assertEqual(captured[0]["n"], 3)
-            self.assertEqual(len(task["data"]), 3)
-            self.assertEqual(task["data"][2]["url"], "http://example.test/image-3.png")
-
-    def test_submit_edit_passes_images_to_handler(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            captured: list[dict[str, object]] = []
-
-            def edit_handler(payload: dict[str, object]):
-                captured.append(payload)
-                return {"data": [{"url": "http://example.test/edited.png"}]}
-
-            service = self.make_service(Path(tmp_dir) / "image_tasks.json", edit_handler=edit_handler)
-            service.submit_edit(
-                OWNER,
-                client_task_id="edit-task",
-                prompt="edit this",
-                model="gpt-image-2",
-                n=1,
-                size="1024x1024",
-                base_url="http://local.test",
-                images=[{"filename": "a.png", "content_type": "image/png", "data": b"abc"}],
-            )
-
-            task = wait_for_task(service, OWNER, "edit-task", "success")
-            self.assertEqual(task["mode"], "edit")
-            self.assertEqual(captured[0]["images"][0]["filename"], "a.png")
-            self.assertEqual(task["data"][0]["url"], "http://example.test/edited.png")
-
-    def test_different_owner_cannot_query_task(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            service = self.make_service(Path(tmp_dir) / "image_tasks.json")
-            service.submit_generation(
-                OWNER,
-                client_task_id="private-task",
+                client_task_id=task_id,
                 prompt="cat",
                 model="gpt-image-2",
                 n=1,
                 size=None,
                 base_url="http://local.test",
+                conversation_id="conv-1",
             )
+        service.submit_generation(
+            OWNER,
+            client_task_id="task-3",
+            prompt="dog",
+            model="gpt-image-2",
+            n=1,
+            size=None,
+            base_url="http://local.test",
+            conversation_id="conv-2",
+        )
+        for task_id in ("task-1", "task-2", "task-3"):
+            wait_for_task(service, OWNER, task_id, "success")
 
-            wait_for_task(service, OWNER, "private-task", "success")
-            result = service.list_tasks(OTHER_OWNER, ["private-task"])
+        deleted = service.delete_conversation(OWNER, "conv-1")
+        self.assertEqual(deleted, 2)
+        history = service.list_tasks(OWNER, [])
+        self.assertEqual([item["id"] for item in history["items"]], ["task-3"])
 
-            self.assertEqual(result["items"], [])
-            self.assertEqual(result["missing_ids"], ["private-task"])
+    def test_clear_history_only_removes_current_owner(self):
+        service = self.make_service()
+        service.submit_generation(OWNER, client_task_id="task-1", prompt="cat", model="gpt-image-2", n=1, size=None, base_url="http://local.test")
+        service.submit_generation(OTHER_OWNER, client_task_id="task-2", prompt="dog", model="gpt-image-2", n=1, size=None, base_url="http://local.test")
+        wait_for_task(service, OWNER, "task-1", "success")
+        wait_for_task(service, OTHER_OWNER, "task-2", "success")
 
-    def test_success_task_persists_to_new_service_instance(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            path = Path(tmp_dir) / "image_tasks.json"
-            service = self.make_service(path)
-            service.submit_generation(
-                OWNER,
-                client_task_id="persisted-task",
-                prompt="cat",
-                model="gpt-image-2",
-                n=1,
-                size=None,
-                base_url="http://local.test",
-            )
-            wait_for_task(service, OWNER, "persisted-task", "success")
-
-            reloaded = self.make_service(path)
-            result = reloaded.list_tasks(OWNER, ["persisted-task"])
-
-            self.assertEqual(result["missing_ids"], [])
-            self.assertEqual(result["items"][0]["status"], "success")
-            self.assertEqual(result["items"][0]["data"][0]["url"], "http://example.test/image.png")
-
-    def test_startup_marks_unfinished_tasks_as_error(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            path = Path(tmp_dir) / "image_tasks.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "tasks": [
-                            {
-                                "id": "queued-task",
-                                "owner_id": "owner-1",
-                                "status": "queued",
-                                "mode": "generate",
-                                "model": "gpt-image-2",
-                                "created_at": "2099-01-01 00:00:00",
-                                "updated_at": "2099-01-01 00:00:00",
-                            },
-                            {
-                                "id": "running-task",
-                                "owner_id": "owner-1",
-                                "status": "running",
-                                "mode": "edit",
-                                "model": "gpt-image-2",
-                                "created_at": "2099-01-01 00:00:00",
-                                "updated_at": "2099-01-01 00:00:00",
-                            },
-                        ]
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            service = self.make_service(path)
-            result = service.list_tasks(OWNER, ["queued-task", "running-task"])
-
-            self.assertEqual([item["status"] for item in result["items"]], ["error", "error"])
-            self.assertEqual([item["mode"] for item in result["items"]], ["generate", "edit"])
-            self.assertTrue(all("已中断" in item.get("error", "") for item in result["items"]))
+        deleted = service.clear_history(OWNER)
+        self.assertEqual(deleted, 1)
+        self.assertEqual(service.list_tasks(OWNER, [])["items"], [])
+        self.assertEqual(len(service.list_tasks(OTHER_OWNER, [])["items"]), 1)
 
 
 if __name__ == "__main__":

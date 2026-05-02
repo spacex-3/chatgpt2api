@@ -12,15 +12,23 @@ export type SettingsConfig = {
   model?: ImageModel;
 };
 
+export type ImageTaskImage = { b64_json?: string; url?: string; revised_prompt?: string };
+
 export type ImageTask = {
   id: string;
   status: "queued" | "running" | "success" | "error";
   mode: "generate" | "edit";
   model?: ImageModel;
   size?: string;
+  n?: number;
+  prompt?: string;
+  conversation_id?: string;
+  conversation_title?: string;
+  owner_id?: string;
+  owner_name?: string;
   created_at: string;
   updated_at: string;
-  data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+  data?: ImageTaskImage[];
   error?: string;
 };
 
@@ -39,6 +47,13 @@ export type LoginResponse = {
   config: SettingsConfig;
 };
 
+export type SettingsResponse = {
+  config: SettingsConfig;
+  subject_id?: string;
+  name?: string;
+  session_token?: string;
+};
+
 export async function login(upstreamApiUrl: string, upstreamApiKey: string) {
   return httpRequest<LoginResponse>("/auth/login", {
     method: "POST",
@@ -50,7 +65,14 @@ export async function login(upstreamApiUrl: string, upstreamApiKey: string) {
   });
 }
 
-export async function createImageGenerationTask(clientTaskId: string, prompt: string, n: number, size?: string) {
+export async function createImageGenerationTask(
+  clientTaskId: string,
+  prompt: string,
+  n: number,
+  size?: string,
+  conversationId?: string,
+  conversationTitle?: string,
+) {
   return httpRequest<ImageTask>("/api/image-tasks/generations", {
     method: "POST",
     body: {
@@ -59,11 +81,21 @@ export async function createImageGenerationTask(clientTaskId: string, prompt: st
       model: "gpt-image-2",
       n,
       ...(size ? { size } : {}),
+      ...(conversationId ? { conversation_id: conversationId } : {}),
+      ...(conversationTitle ? { conversation_title: conversationTitle } : {}),
     },
   });
 }
 
-export async function createImageEditTask(clientTaskId: string, files: File | File[], prompt: string, n: number, size?: string) {
+export async function createImageEditTask(
+  clientTaskId: string,
+  files: File | File[],
+  prompt: string,
+  n: number,
+  size?: string,
+  conversationId?: string,
+  conversationTitle?: string,
+) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
   uploadFiles.forEach((file) => {
@@ -75,6 +107,12 @@ export async function createImageEditTask(clientTaskId: string, files: File | Fi
   formData.append("n", String(n));
   if (size) {
     formData.append("size", size);
+  }
+  if (conversationId) {
+    formData.append("conversation_id", conversationId);
+  }
+  if (conversationTitle) {
+    formData.append("conversation_title", conversationTitle);
   }
   return httpRequest<ImageTask>("/api/image-tasks/edits", {
     method: "POST",
@@ -90,12 +128,28 @@ export async function fetchImageTasks(ids: string[]) {
   return httpRequest<ImageTaskListResponse>(`/api/image-tasks${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
+export async function deleteImageTaskConversation(conversationId: string) {
+  return httpRequest<{ ok: boolean; deleted: number }>(`/api/image-tasks/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function clearImageTaskHistory() {
+  return httpRequest<{ ok: boolean; deleted: number }>("/api/image-tasks/history", {
+    method: "DELETE",
+  });
+}
+
+export async function fetchAdminImageTasks(limit = 200) {
+  return httpRequest<ImageTaskListResponse>(`/api/admin/image-tasks?limit=${encodeURIComponent(String(limit))}`);
+}
+
 export async function fetchSettingsConfig() {
-  return httpRequest<{ config: SettingsConfig }>("/api/settings");
+  return httpRequest<SettingsResponse>("/api/settings");
 }
 
 export async function updateSettingsConfig(settings: Partial<SettingsConfig>) {
-  return httpRequest<{ config: SettingsConfig }>("/api/settings", {
+  return httpRequest<SettingsResponse>("/api/settings", {
     method: "POST",
     body: settings,
   });

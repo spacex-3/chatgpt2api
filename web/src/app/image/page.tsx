@@ -18,8 +18,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  clearImageTaskHistory,
   createImageEditTask,
   createImageGenerationTask,
+  deleteImageTaskConversation,
   fetchImageTasks,
   type ImageTask,
 } from "@/lib/api";
@@ -236,6 +238,63 @@ function collectPendingTaskIds(conversations: ImageConversation[]) {
   );
 }
 
+function buildTurnFromTask(task: ImageTask): ImageTurn {
+  const requestedCount = Math.max(1, Number(task.n || 1));
+  const itemCount = Math.max(requestedCount, (task.data || []).length || 0);
+  const baseTurn: ImageTurn = {
+    id: task.id,
+    taskId: task.id,
+    prompt: task.prompt || "",
+    model: "gpt-image-2",
+    mode: task.mode === "edit" ? "edit" : "generate",
+    referenceImages: [],
+    count: itemCount,
+    size: task.size || "",
+    createdAt: task.created_at,
+    status: task.status === "queued" ? "queued" : task.status === "running" ? "generating" : task.status,
+    images: Array.from({ length: itemCount }, (_, index) => ({
+      id: `${task.id}-${index}`,
+      status: task.status === "error" ? "error" : task.status === "success" ? "success" : "loading",
+      error: task.status === "error" ? task.error || "生成失败" : undefined,
+    })),
+  };
+  return applyTaskToTurn(baseTurn, task);
+}
+
+function buildConversationsFromTasks(tasks: ImageTask[]) {
+  const groups = new Map<string, ImageConversation>();
+  const sortedTasks = [...tasks].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  for (const task of sortedTasks) {
+    const conversationId = task.conversation_id || task.id;
+    const current = groups.get(conversationId);
+    const turn = buildTurnFromTask(task);
+    if (!current) {
+      groups.set(conversationId, {
+        id: conversationId,
+        title: task.conversation_title || buildConversationTitle(task.prompt || task.id),
+        createdAt: task.created_at,
+        updatedAt: task.updated_at,
+        turns: [turn],
+      });
+      continue;
+    }
+    current.turns.push(turn);
+    current.updatedAt = task.updated_at > current.updatedAt ? task.updated_at : current.updatedAt;
+    if (!current.title && task.conversation_title) {
+      current.title = task.conversation_title;
+    }
+  }
+  return sortImageConversations(Array.from(groups.values()));
+}
+
+function mergeServerAndLocalConversations(serverItems: ImageConversation[], localItems: ImageConversation[]) {
+  const serverIds = new Set(serverItems.map((item) => item.id));
+  return sortImageConversations([
+    ...serverItems,
+    ...localItems.filter((item) => !serverIds.has(item.id)),
+  ]);
+}
+
 function applyTaskUpdates(conversations: ImageConversation[], tasks: ImageTask[], missingIds: string[]) {
   const taskMap = new Map(tasks.map((task) => [task.id, task]));
   const missingIdSet = new Set(missingIds);
@@ -400,18 +459,26 @@ function ImagePageContent() {
         setImageSize(storedSize || "");
         setImageCount(storedCount ? clampImageCount(storedCount) : "1");
 
-        const items = await listImageConversations();
-        const normalizedItems = await recoverConversationHistory(items);
+        const localItems = await listImageConversations();
+        const normalizedLocalItems = await recoverConversationHistory(localItems);
+        let nextItems = normalizedLocalItems;
+        try {
+          const serverTaskList = await fetchImageTasks([]);
+          nextItems = mergeServerAndLocalConversations(buildConversationsFromTasks(serverTaskList.items), normalizedLocalItems);
+          await saveImageConversations(nextItems);
+        } catch {
+          nextItems = normalizedLocalItems;
+        }
         if (cancelled) {
           return;
         }
-        replaceConversations(normalizedItems);
+        replaceConversations(nextItems);
         const storedConversationId =
           typeof window !== "undefined" ? window.localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY) : null;
         const nextSelectedConversationId =
-          (storedConversationId && normalizedItems.some((conversation) => conversation.id === storedConversationId)
+          (storedConversationId && nextItems.some((conversation) => conversation.id === storedConversationId)
             ? storedConversationId
-            : null) ?? pickFallbackConversationId(normalizedItems);
+            : null) ?? pickFallbackConversationId(nextItems);
         setSelectedConversationId(nextSelectedConversationId);
       } catch (error) {
         const message = error instanceof Error ? error.message : "读取会话记录失败";
@@ -532,7 +599,10 @@ function ImagePageContent() {
       clearComposerInputs();
     }
     try {
-      await deleteImageConversation(id);
+      await Promise.all([
+        deleteImageTaskConversation(id),
+        deleteImageConversation(id),
+      ]);
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除会话失败";
       toast.error(message);
@@ -543,7 +613,10 @@ function ImagePageContent() {
 
   const handleClearHistory = useCallback(async () => {
     try {
-      await clearImageConversations();
+      await Promise.all([
+        clearImageTaskHistory(),
+        clearImageConversations(),
+      ]);
       replaceConversations([]);
       setSelectedConversationId(null);
       clearComposerInputs();
@@ -701,9 +774,10 @@ function ImagePageContent() {
     await persistConversation(baseConversation);
 
     try {
+      const conversationTitle = targetConversation?.title || buildConversationTitle(prompt);
       const task = effectiveImageMode === "edit"
-        ? await createImageEditTask(turnId, referenceImageFiles, prompt, parsedCount, imageSize || undefined)
-        : await createImageGenerationTask(turnId, prompt, parsedCount, imageSize || undefined);
+        ? await createImageEditTask(turnId, referenceImageFiles, prompt, parsedCount, imageSize || undefined, conversationId, conversationTitle)
+        : await createImageGenerationTask(turnId, prompt, parsedCount, imageSize || undefined, conversationId, conversationTitle);
       await updateConversation(conversationId, (current) => {
         const conversation = current ?? baseConversation;
         return {
