@@ -159,6 +159,18 @@ function applyTaskToTurn(turn: ImageTurn, task: ImageTask): ImageTurn {
   if (task.status === "success") {
     const items = task.data || [];
     if (items.length === 0) {
+      if (Number(task.result_count || 0) > 0) {
+        return {
+          ...turn,
+          taskId: task.id,
+          status: "success",
+          error: undefined,
+          images: Array.from({ length: Math.max(turn.count, Number(task.result_count || 0)) }, (_, index) => ({
+            id: `${turn.id}-${index}`,
+            status: "loading",
+          })),
+        };
+      }
       return {
         ...turn,
         taskId: task.id,
@@ -238,9 +250,31 @@ function collectPendingTaskIds(conversations: ImageConversation[]) {
   );
 }
 
+function collectConversationHydrationTaskIds(conversation: ImageConversation | null) {
+  if (!conversation) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      conversation.turns.flatMap((turn) => {
+        if (turn.status !== "success") {
+          return [];
+        }
+        const taskId = turn.taskId || turn.id;
+        const hasRenderableImage = turn.images.some((image) => Boolean(image.b64_json || image.url));
+        if (!taskId || hasRenderableImage) {
+          return [];
+        }
+        return [taskId];
+      }),
+    ),
+  );
+}
+
 function buildTurnFromTask(task: ImageTask): ImageTurn {
   const requestedCount = Math.max(1, Number(task.n || 1));
-  const itemCount = Math.max(requestedCount, (task.data || []).length || 0);
+  const resultCount = Math.max(0, Number(task.result_count || 0));
+  const itemCount = Math.max(requestedCount, (task.data || []).length || resultCount || 0);
   const baseTurn: ImageTurn = {
     id: task.id,
     taskId: task.id,
@@ -258,6 +292,9 @@ function buildTurnFromTask(task: ImageTask): ImageTurn {
       error: task.status === "error" ? task.error || "生成失败" : undefined,
     })),
   };
+  if (task.status === "success" && (!task.data || task.data.length === 0) && resultCount > 0) {
+    return baseTurn;
+  }
   return applyTaskToTurn(baseTurn, task);
 }
 
@@ -302,7 +339,11 @@ function applyTaskUpdates(conversations: ImageConversation[], tasks: ImageTask[]
   const nextItems = conversations.map((conversation) => {
     let conversationChanged = false;
     const nextTurns = conversation.turns.map((turn) => {
-      if (turn.status !== "queued" && turn.status !== "generating") {
+      const needsHydration =
+        turn.status === "success"
+        && turn.images.length > 0
+        && turn.images.every((image) => !image.b64_json && !image.url && image.status !== "error");
+      if (!needsHydration && turn.status !== "queued" && turn.status !== "generating") {
         return turn;
       }
       const taskId = turn.taskId || turn.id;
@@ -379,6 +420,7 @@ function ImagePageContent() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isSyncingRef = useRef(false);
+  const isHydratingConversationRef = useRef(false);
 
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
@@ -459,15 +501,14 @@ function ImagePageContent() {
         setImageSize(storedSize || "");
         setImageCount(storedCount ? clampImageCount(storedCount) : "1");
 
-        const localItems = await listImageConversations();
-        const normalizedLocalItems = await recoverConversationHistory(localItems);
-        let nextItems = normalizedLocalItems;
+        let nextItems: ImageConversation[] = [];
         try {
           const serverTaskList = await fetchImageTasks([]);
-          nextItems = mergeServerAndLocalConversations(buildConversationsFromTasks(serverTaskList.items), normalizedLocalItems);
+          nextItems = buildConversationsFromTasks(serverTaskList.items);
           await saveImageConversations(nextItems);
         } catch {
-          nextItems = normalizedLocalItems;
+          const localItems = await listImageConversations();
+          nextItems = await recoverConversationHistory(localItems);
         }
         if (cancelled) {
           return;
@@ -508,6 +549,28 @@ function ImagePageContent() {
       window.clearInterval(timer);
     };
   }, [pendingTaskSignature, syncPendingTasks]);
+
+  useEffect(() => {
+    const taskIds = collectConversationHydrationTaskIds(selectedConversation);
+    if (taskIds.length === 0 || isHydratingConversationRef.current) {
+      return;
+    }
+    isHydratingConversationRef.current = true;
+    void (async () => {
+      try {
+        const taskList = await fetchImageTasks(taskIds);
+        const { items, changed } = applyTaskUpdates(conversationsRef.current, taskList.items, taskList.missing_ids);
+        if (changed) {
+          replaceConversations(items);
+          await saveImageConversations(items);
+        }
+      } catch {
+        // ignore and retry when user revisits the conversation
+      } finally {
+        isHydratingConversationRef.current = false;
+      }
+    })();
+  }, [selectedConversation, replaceConversations]);
 
   useEffect(() => {
     if (!selectedConversation) {

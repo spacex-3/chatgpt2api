@@ -236,7 +236,13 @@ export function ImageResults({
                               <LoaderCircle className="size-5 animate-spin" />
                             )}
                           </div>
-                          <p className="text-sm">{turn.status === "queued" ? "等待处理图片..." : "正在处理图片..."}</p>
+                          <p className="text-sm">
+                            {turn.status === "queued"
+                              ? "等待处理图片..."
+                              : turn.status === "success"
+                                ? "正在读取历史图片..."
+                                : "正在处理图片..."}
+                          </p>
                         </div>
                       </div>
                     );

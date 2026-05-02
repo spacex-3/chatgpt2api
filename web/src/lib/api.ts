@@ -28,6 +28,7 @@ export type ImageTask = {
   owner_name?: string;
   created_at: string;
   updated_at: string;
+  result_count?: number;
   data?: ImageTaskImage[];
   error?: string;
 };

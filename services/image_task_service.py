@@ -54,7 +54,8 @@ def _task_key(owner_id: str, task_id: str) -> str:
     return f"{owner_id}:{task_id}"
 
 
-def _public_task(task: dict[str, Any], *, include_owner: bool = False) -> dict[str, Any]:
+def _public_task(task: dict[str, Any], *, include_owner: bool = False, include_data: bool = True) -> dict[str, Any]:
+    raw_data = task.get("data") if isinstance(task.get("data"), list) else []
     item = {
         "id": task.get("id"),
         "status": task.get("status"),
@@ -67,11 +68,12 @@ def _public_task(task: dict[str, Any], *, include_owner: bool = False) -> dict[s
         "conversation_title": task.get("conversation_title") or "",
         "created_at": task.get("created_at"),
         "updated_at": task.get("updated_at"),
+        "result_count": len(raw_data),
     }
     if include_owner:
         item["owner_id"] = task.get("owner_id")
         item["owner_name"] = task.get("owner_name")
-    if task.get("data") is not None:
+    if include_data and task.get("data") is not None:
         item["data"] = task.get("data")
     if task.get("error"):
         item["error"] = task.get("error")
@@ -199,7 +201,11 @@ class ImageTaskService:
                 else:
                     items.append(_public_task(task))
             if not requested_ids:
-                items = [_public_task(task) for task in self._tasks.values() if task.get("owner_id") == owner]
+                items = [
+                    _public_task(task, include_data=False)
+                    for task in self._tasks.values()
+                    if task.get("owner_id") == owner
+                ]
                 items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
                 missing_ids = []
             return {"items": items, "missing_ids": missing_ids}
