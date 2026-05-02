@@ -7,8 +7,9 @@ from typing import Any, TypedDict
 from urllib.parse import urlparse
 
 try:
-    from curl_cffi import requests
+    from curl_cffi import CurlMime, requests
 except ImportError:  # pragma: no cover
+    CurlMime = None  # type: ignore[assignment]
     requests = None  # type: ignore[assignment]
 
 from services.config import config
@@ -196,7 +197,7 @@ class UpstreamOpenAIImageClient:
         invalid_payload_message: str,
         json_payload: dict[str, Any] | None = None,
         form_payload: dict[str, Any] | None = None,
-        files: list[tuple[str, tuple[str, bytes, str]]] | None = None,
+        multipart: Any | None = None,
     ) -> dict[str, Any]:
         session = self._session()
         try:
@@ -204,7 +205,7 @@ class UpstreamOpenAIImageClient:
                 build_upstream_url(self.api_url, path),
                 json=json_payload,
                 data=form_payload,
-                files=files,
+                multipart=multipart,
                 timeout=timeout,
             )
             if not (200 <= response.status_code < 300):
@@ -337,17 +338,23 @@ class UpstreamOpenAIImageClient:
         payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
         if size:
             payload["size"] = size
-        files = [
-            ("image", (item["filename"], item["data"], item["content_type"]))
-            for item in images
-        ]
+        if CurlMime is None:
+            raise RuntimeError("curl_cffi multipart support is unavailable")
+        multipart = CurlMime()
+        for item in images:
+            multipart.addpart(
+                name="image",
+                filename=item["filename"],
+                content_type=item["content_type"],
+                data=item["data"],
+            )
         raw = self._post_json(
             "/images/edits",
             timeout=300,
             default_message="upstream image edit failed",
             invalid_payload_message="upstream image edit returned an invalid payload",
             form_payload=payload,
-            files=files,
+            multipart=multipart,
         )
         return self._normalize_result(raw, prompt=prompt, base_url=base_url)
 
