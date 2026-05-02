@@ -113,18 +113,30 @@ class UpstreamClientBehaviorTests(unittest.TestCase):
 
     def test_generate_parallel_failure_surfaces_count_and_original_error(self):
         client = self.make_client()
+
+        def fake_generate_once(*, prompt: str, model: str, size: str | None, base_url: str | None):
+            raise ImageGenerationError("upstream timeout", status_code=504, error_type="server_error", code="timeout")
+
+        with patch.object(client, "_generate_once", side_effect=fake_generate_once):
+            with self.assertRaisesRegex(ImageGenerationError, "3/3 concurrent upstream requests"):
+                client.generate(prompt="cat", model="gpt-image-2", n=3, size=None, base_url="http://local.test")
+
+    def test_generate_parallel_retries_transient_failure(self):
+        client = self.make_client()
         calls = 0
 
         def fake_generate_once(*, prompt: str, model: str, size: str | None, base_url: str | None):
             nonlocal calls
             calls += 1
-            if calls == 2:
-                raise ImageGenerationError("upstream timeout", status_code=504, error_type="server_error", code="timeout")
+            if calls == 1:
+                raise RuntimeError("connection closed abruptly")
             return {"created": 100 + calls, "data": [{"url": f"http://example.test/{calls}.png"}]}
 
         with patch.object(client, "_generate_once", side_effect=fake_generate_once):
-            with self.assertRaisesRegex(ImageGenerationError, "1/3 concurrent upstream requests"):
-                client.generate(prompt="cat", model="gpt-image-2", n=3, size=None, base_url="http://local.test")
+            result = client.generate(prompt="cat", model="gpt-image-2", n=1, size=None, base_url="http://local.test")
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(len(result["data"]), 1)
 
 
 if __name__ == "__main__":

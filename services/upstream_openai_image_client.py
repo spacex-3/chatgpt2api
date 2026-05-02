@@ -272,13 +272,35 @@ class UpstreamOpenAIImageClient:
             ) from first
         raise ImageGenerationError(message) from first
 
-    def _run_parallel(self, count: int, worker) -> list[dict[str, Any]]:
+    @staticmethod
+    def _should_retry_parallel_error(exc: BaseException) -> bool:
+        if isinstance(exc, ImageGenerationError):
+            if exc.status_code >= 500:
+                return True
+            return exc.code in {"timeout", "upstream_error"}
+        return True
+
+    def _run_parallel(self, count: int, worker, *, action: str) -> list[dict[str, Any]]:
+        def worker_with_retry():
+            last_error: BaseException | None = None
+            for attempt in range(3):
+                try:
+                    return worker()
+                except BaseException as exc:  # pragma: no cover - defensive
+                    last_error = exc
+                    if attempt >= 2 or not self._should_retry_parallel_error(exc):
+                        raise
+                    time.sleep(min(1.5 * (attempt + 1), 3))
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("parallel worker failed without an error")
+
         if count <= 1:
-            return [worker()]
+            return [worker_with_retry()]
         results: list[dict[str, Any] | None] = [None] * count
         failures: list[BaseException] = []
         with ThreadPoolExecutor(max_workers=count) as executor:
-            future_to_index = {executor.submit(worker): index for index in range(count)}
+            future_to_index = {executor.submit(worker_with_retry): index for index in range(count)}
             for future in as_completed(future_to_index):
                 index = future_to_index[future]
                 try:
@@ -287,7 +309,7 @@ class UpstreamOpenAIImageClient:
                 except BaseException as exc:  # pragma: no cover - defensive
                     failures.append(exc)
         if failures:
-            self._raise_parallel_failure("image generation", count, failures)
+            self._raise_parallel_failure(action, count, failures)
         return [result for result in results if isinstance(result, dict)]
 
     def _generate_once(self, *, prompt: str, model: str, size: str | None, base_url: str | None) -> dict[str, Any]:
@@ -361,6 +383,7 @@ class UpstreamOpenAIImageClient:
                 size=normalized_size,
                 base_url=base_url,
             ),
+            action="image generation",
         )
         return self._combine_parallel_results(results, expected_count=normalized_n)
 
@@ -385,5 +408,6 @@ class UpstreamOpenAIImageClient:
                 images=normalized_images,
                 base_url=base_url,
             ),
+            action="image edit",
         )
         return self._combine_parallel_results(results, expected_count=normalized_n)
