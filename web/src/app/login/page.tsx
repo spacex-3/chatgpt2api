@@ -84,7 +84,7 @@ export default function LoginPage() {
                 value={apiUrl}
                 onChange={(event) => setApiUrl(event.target.value)}
                 placeholder="https://your-newapi.example.com/v1"
-                className="h-13 rounded-2xl border-stone-200 bg-white pl-11"
+                className="h-[52px] rounded-2xl border-stone-200 bg-white pl-11"
               />
             </div>
             <p className="text-xs leading-5 text-stone-500">建议直接填写 OpenAI 兼容基地址，通常以 /v1 结尾。</p>
@@ -107,13 +107,13 @@ export default function LoginPage() {
                   }
                 }}
                 placeholder="sk-..."
-                className="h-13 rounded-2xl border-stone-200 bg-white pl-11"
+                className="h-[52px] rounded-2xl border-stone-200 bg-white pl-11"
               />
             </div>
           </div>
 
           <Button
-            className="h-13 w-full rounded-2xl bg-stone-950 text-white hover:bg-stone-800"
+            className="h-[52px] w-full rounded-2xl bg-stone-950 text-white hover:bg-stone-800"
             onClick={() => void handleLogin()}
             disabled={isSubmitting}
           >

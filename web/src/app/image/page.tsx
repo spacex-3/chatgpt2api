@@ -606,8 +606,21 @@ function ImagePageContent() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除会话失败";
       toast.error(message);
-      const items = await listImageConversations();
-      replaceConversations(items);
+      try {
+        const [localItems, serverTaskList] = await Promise.all([
+          listImageConversations(),
+          fetchImageTasks([]),
+        ]);
+        replaceConversations(
+          mergeServerAndLocalConversations(
+            buildConversationsFromTasks(serverTaskList.items),
+            localItems,
+          ),
+        );
+      } catch {
+        const items = await listImageConversations();
+        replaceConversations(items);
+      }
     }
   }, [clearComposerInputs, replaceConversations, selectedConversationId]);
 

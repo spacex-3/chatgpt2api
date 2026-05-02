@@ -259,8 +259,8 @@ function AdminPageContent() {
 }
 
 export default function AdminPage() {
-  const { isChecking } = useAuthGuard();
-  if (isChecking) {
+  const { isCheckingAuth, session } = useAuthGuard(["admin"]);
+  if (isCheckingAuth || !session) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center text-stone-500">
         <LoaderCircle className="size-5 animate-spin" />
