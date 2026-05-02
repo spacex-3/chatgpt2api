@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+from services.image_errors import ImageGenerationError
 from services.upstream_openai_image_client import (
+    UpstreamOpenAIImageClient,
     build_upstream_url,
     normalize_image_inputs,
     normalize_upstream_api_url,
@@ -45,6 +48,83 @@ class UpstreamClientHelperTests(unittest.TestCase):
         self.assertEqual(images[0]["filename"], "a.png")
         self.assertEqual(images[0]["content_type"], "image/png")
         self.assertEqual(images[0]["data"], b"123")
+
+
+class UpstreamClientBehaviorTests(unittest.TestCase):
+    def make_client(self) -> UpstreamOpenAIImageClient:
+        return UpstreamOpenAIImageClient(api_url="https://example.com/v1", api_key="sk-test")
+
+    def test_generate_single_image_uses_single_upstream_call(self):
+        client = self.make_client()
+        captured: list[tuple[str, str, str | None, str | None]] = []
+
+        def fake_generate_once(*, prompt: str, model: str, size: str | None, base_url: str | None):
+            captured.append((prompt, model, size, base_url))
+            return {"created": 100, "data": [{"url": "http://example.test/1.png"}]}
+
+        with patch.object(client, "_generate_once", side_effect=fake_generate_once):
+            result = client.generate(prompt="cat", model="gpt-image-2", n=1, size="1024x1024", base_url="http://local.test")
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0], ("cat", "gpt-image-2", "1024x1024", "http://local.test"))
+        self.assertEqual(len(result["data"]), 1)
+        self.assertEqual(result["data"][0]["url"], "http://example.test/1.png")
+
+    def test_generate_multiple_images_fans_out_to_parallel_single_image_calls(self):
+        client = self.make_client()
+        call_indexes: list[int] = []
+
+        def fake_generate_once(*, prompt: str, model: str, size: str | None, base_url: str | None):
+            next_index = len(call_indexes) + 1
+            call_indexes.append(next_index)
+            return {"created": 100 + next_index, "data": [{"url": f"http://example.test/{next_index}.png"}]}
+
+        with patch.object(client, "_generate_once", side_effect=fake_generate_once):
+            result = client.generate(prompt="cat", model="gpt-image-2", n=3, size=None, base_url="http://local.test")
+
+        self.assertEqual(len(call_indexes), 3)
+        self.assertEqual(len(result["data"]), 3)
+        self.assertEqual([item["url"] for item in result["data"]], [
+            "http://example.test/1.png",
+            "http://example.test/2.png",
+            "http://example.test/3.png",
+        ])
+
+    def test_edit_multiple_images_fans_out_to_parallel_single_image_calls(self):
+        client = self.make_client()
+        call_indexes: list[int] = []
+        images = [{"filename": "a.png", "content_type": "image/png", "data": b"123"}]
+
+        def fake_edit_once(*, prompt: str, model: str, size: str | None, images, base_url: str | None):
+            next_index = len(call_indexes) + 1
+            call_indexes.append(next_index)
+            self.assertEqual(images[0]["filename"], "a.png")
+            return {"created": 200 + next_index, "data": [{"url": f"http://example.test/edit-{next_index}.png"}]}
+
+        with patch.object(client, "_edit_once", side_effect=fake_edit_once):
+            result = client.edit(prompt="edit cat", model="gpt-image-2", n=2, size="1024x1024", images=images, base_url="http://local.test")
+
+        self.assertEqual(len(call_indexes), 2)
+        self.assertEqual(len(result["data"]), 2)
+        self.assertEqual([item["url"] for item in result["data"]], [
+            "http://example.test/edit-1.png",
+            "http://example.test/edit-2.png",
+        ])
+
+    def test_generate_parallel_failure_surfaces_count_and_original_error(self):
+        client = self.make_client()
+        calls = 0
+
+        def fake_generate_once(*, prompt: str, model: str, size: str | None, base_url: str | None):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise ImageGenerationError("upstream timeout", status_code=504, error_type="server_error", code="timeout")
+            return {"created": 100 + calls, "data": [{"url": f"http://example.test/{calls}.png"}]}
+
+        with patch.object(client, "_generate_once", side_effect=fake_generate_once):
+            with self.assertRaisesRegex(ImageGenerationError, "1/3 concurrent upstream requests"):
+                client.generate(prompt="cat", model="gpt-image-2", n=3, size=None, base_url="http://local.test")
 
 
 if __name__ == "__main__":

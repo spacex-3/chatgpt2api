@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, TypedDict
 from urllib.parse import urlparse
 
@@ -186,6 +187,148 @@ class UpstreamOpenAIImageClient:
             result["message"] = str(payload.get("message"))
         return result
 
+    def _post_json(
+        self,
+        path: str,
+        *,
+        timeout: int,
+        default_message: str,
+        invalid_payload_message: str,
+        json_payload: dict[str, Any] | None = None,
+        form_payload: dict[str, Any] | None = None,
+        files: list[tuple[str, tuple[str, bytes, str]]] | None = None,
+    ) -> dict[str, Any]:
+        session = self._session()
+        try:
+            response = session.post(
+                build_upstream_url(self.api_url, path),
+                json=json_payload,
+                data=form_payload,
+                files=files,
+                timeout=timeout,
+            )
+            if not (200 <= response.status_code < 300):
+                raise self._error_from_response(response, default_message=default_message)
+            raw = response.json()
+        finally:
+            session.close()
+        if not isinstance(raw, dict):
+            raise ImageGenerationError(invalid_payload_message)
+        return raw
+
+    @staticmethod
+    def _merge_usage(results: list[dict[str, Any]]) -> dict[str, Any] | None:
+        usage: dict[str, Any] = {}
+        for result in results:
+            item = result.get("usage")
+            if not isinstance(item, dict):
+                continue
+            for key, value in item.items():
+                if isinstance(value, (int, float)):
+                    usage[key] = usage.get(key, 0) + value
+                elif key not in usage:
+                    usage[key] = value
+        return usage or None
+
+    @staticmethod
+    def _combine_parallel_results(results: list[dict[str, Any]], *, expected_count: int) -> dict[str, Any]:
+        data: list[dict[str, Any]] = []
+        created_values: list[int] = []
+        for result in results:
+            created = result.get("created")
+            if isinstance(created, int):
+                created_values.append(created)
+            items = result.get("data") if isinstance(result.get("data"), list) else []
+            for item in items:
+                if isinstance(item, dict):
+                    data.append(item)
+        if len(data) != expected_count:
+            raise ImageGenerationError(
+                f"expected {expected_count} image results but received {len(data)}",
+                status_code=502,
+                error_type="server_error",
+                code="invalid_upstream_payload",
+            )
+        merged: dict[str, Any] = {
+            "created": min(created_values) if created_values else int(time.time()),
+            "data": data,
+        }
+        usage = UpstreamOpenAIImageClient._merge_usage(results)
+        if usage:
+            merged["usage"] = usage
+        return merged
+
+    @staticmethod
+    def _raise_parallel_failure(action: str, total: int, failures: list[BaseException]) -> None:
+        first = failures[0]
+        message = f"{action} failed for {len(failures)}/{total} concurrent upstream requests: {first}"
+        if isinstance(first, ImageGenerationError):
+            raise ImageGenerationError(
+                message,
+                status_code=first.status_code,
+                error_type=first.error_type,
+                code=first.code,
+                param=first.param,
+            ) from first
+        raise ImageGenerationError(message) from first
+
+    def _run_parallel(self, count: int, worker) -> list[dict[str, Any]]:
+        if count <= 1:
+            return [worker()]
+        results: list[dict[str, Any] | None] = [None] * count
+        failures: list[BaseException] = []
+        with ThreadPoolExecutor(max_workers=count) as executor:
+            future_to_index = {executor.submit(worker): index for index in range(count)}
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    result = future.result()
+                    results[index] = result
+                except BaseException as exc:  # pragma: no cover - defensive
+                    failures.append(exc)
+        if failures:
+            self._raise_parallel_failure("image generation", count, failures)
+        return [result for result in results if isinstance(result, dict)]
+
+    def _generate_once(self, *, prompt: str, model: str, size: str | None, base_url: str | None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
+        if size:
+            payload["size"] = size
+        raw = self._post_json(
+            "/images/generations",
+            timeout=300,
+            default_message="upstream image generation failed",
+            invalid_payload_message="upstream image generation returned an invalid payload",
+            json_payload=payload,
+        )
+        return self._normalize_result(raw, prompt=prompt, base_url=base_url)
+
+    def _edit_once(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        size: str | None,
+        images: list[UpstreamImageInput],
+        base_url: str | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
+        if size:
+            payload["size"] = size
+        files = [
+            ("image", (item["filename"], item["data"], item["content_type"]))
+            for item in images
+        ]
+        raw = self._post_json(
+            "/images/edits",
+            timeout=300,
+            default_message="upstream image edit failed",
+            invalid_payload_message="upstream image edit returned an invalid payload",
+            form_payload=payload,
+            files=files,
+        )
+        return self._normalize_result(raw, prompt=prompt, base_url=base_url)
+
     def validate_credentials(self) -> dict[str, Any]:
         session = self._session()
         try:
@@ -210,20 +353,16 @@ class UpstreamOpenAIImageClient:
 
     def generate(self, *, prompt: str, model: str, n: int, size: str | None, base_url: str | None) -> dict[str, Any]:
         normalized_prompt, normalized_model, normalized_n, normalized_size = validate_image_request(prompt, model, n, size)
-        session = self._session()
-        payload: dict[str, Any] = {"model": normalized_model, "prompt": normalized_prompt, "n": normalized_n}
-        if normalized_size:
-            payload["size"] = normalized_size
-        try:
-            response = session.post(build_upstream_url(self.api_url, "/images/generations"), json=payload, timeout=300)
-            if not (200 <= response.status_code < 300):
-                raise self._error_from_response(response, default_message="upstream image generation failed")
-            raw = response.json()
-        finally:
-            session.close()
-        if not isinstance(raw, dict):
-            raise ImageGenerationError("upstream image generation returned an invalid payload")
-        return self._normalize_result(raw, prompt=normalized_prompt, base_url=base_url)
+        results = self._run_parallel(
+            normalized_n,
+            lambda: self._generate_once(
+                prompt=normalized_prompt,
+                model=normalized_model,
+                size=normalized_size,
+                base_url=base_url,
+            ),
+        )
+        return self._combine_parallel_results(results, expected_count=normalized_n)
 
     def edit(
         self,
@@ -237,21 +376,14 @@ class UpstreamOpenAIImageClient:
     ) -> dict[str, Any]:
         normalized_prompt, normalized_model, normalized_n, normalized_size = validate_image_request(prompt, model, n, size)
         normalized_images = normalize_image_inputs(images)
-        session = self._session()
-        payload: dict[str, Any] = {"model": normalized_model, "prompt": normalized_prompt, "n": normalized_n}
-        if normalized_size:
-            payload["size"] = normalized_size
-        files = [
-            ("image", (item["filename"], item["data"], item["content_type"]))
-            for item in normalized_images
-        ]
-        try:
-            response = session.post(build_upstream_url(self.api_url, "/images/edits"), data=payload, files=files, timeout=300)
-            if not (200 <= response.status_code < 300):
-                raise self._error_from_response(response, default_message="upstream image edit failed")
-            raw = response.json()
-        finally:
-            session.close()
-        if not isinstance(raw, dict):
-            raise ImageGenerationError("upstream image edit returned an invalid payload")
-        return self._normalize_result(raw, prompt=normalized_prompt, base_url=base_url)
+        results = self._run_parallel(
+            normalized_n,
+            lambda: self._edit_once(
+                prompt=normalized_prompt,
+                model=normalized_model,
+                size=normalized_size,
+                images=normalized_images,
+                base_url=base_url,
+            ),
+        )
+        return self._combine_parallel_results(results, expected_count=normalized_n)
