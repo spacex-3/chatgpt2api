@@ -569,7 +569,9 @@ function ImagePageContent() {
         let allowedMaxImageCount = 10;
         try {
           const settingsData = await fetchSettingsConfig();
-          allowedMaxImageCount = Math.max(1, Math.min(10, Number(settingsData.config.max_images_per_request) || 10));
+          allowedMaxImageCount = settingsData.role === "admin"
+            ? 10
+            : Math.max(1, Math.min(10, Number(settingsData.config.max_images_per_request) || 10));
         } catch {
           allowedMaxImageCount = 10;
         }

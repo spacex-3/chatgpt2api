@@ -48,6 +48,10 @@ def _parse_edit_uploads_or_raise(image: list[UploadFile] | None, image_list: lis
     return uploads
 
 
+def _allowed_max_n(identity: dict[str, object]) -> int:
+    return 10 if str(identity.get("role") or "").strip() == "admin" else config.max_images_per_request
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
@@ -69,9 +73,35 @@ def create_router() -> APIRouter:
         return {"ok": True, "deleted": deleted}
 
     @router.get("/api/admin/image-tasks")
-    async def list_admin_image_tasks(limit: int = Query(default=200, ge=1, le=1000), authorization: str | None = Header(default=None)):
+    async def list_admin_image_tasks(
+        limit: int = Query(default=200, ge=1, le=1000),
+        credential_query: str = Query(default=""),
+        mode: Literal["generate", "edit"] | None = Query(default=None),
+        updated_from: str = Query(default=""),
+        updated_to: str = Query(default=""),
+        authorization: str | None = Header(default=None),
+    ):
         require_admin(authorization)
-        return await run_in_threadpool(image_task_service.list_all_tasks, limit)
+        return await run_in_threadpool(
+            image_task_service.list_admin_tasks,
+            limit=limit,
+            credential_query=credential_query,
+            mode=mode or "",
+            updated_from=updated_from,
+            updated_to=updated_to,
+        )
+
+    @router.get("/api/admin/image-tasks/detail")
+    async def get_admin_image_task_detail(
+        owner_id: str = Query(..., min_length=1),
+        task_id: str = Query(..., min_length=1),
+        authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        item = await run_in_threadpool(image_task_service.get_admin_task, owner_id, task_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail={"error": "image task not found"})
+        return {"item": item}
 
     @router.post("/api/image-tasks/generations")
     async def create_generation_task(
@@ -80,7 +110,7 @@ def create_router() -> APIRouter:
         authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
-        parsed_n = _parse_n_or_raise(body.n, max_n=config.max_images_per_request)
+        parsed_n = _parse_n_or_raise(body.n, max_n=_allowed_max_n(identity))
         try:
             return await run_in_threadpool(
                 image_task_service.submit_generation,
@@ -115,7 +145,7 @@ def create_router() -> APIRouter:
         if model != SUPPORTED_IMAGE_MODEL:
             raise HTTPException(status_code=400, detail={"error": f"model must be {SUPPORTED_IMAGE_MODEL}"})
         uploads = _parse_edit_uploads_or_raise(image, image_list)
-        parsed_n = _parse_n_or_raise(n, max_n=config.max_images_per_request)
+        parsed_n = _parse_n_or_raise(n, max_n=_allowed_max_n(identity))
         images_payload: list[UpstreamImageInput] = []
         for upload in uploads:
             image_data = await upload.read()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from services.config import DATA_DIR, config
+from services.local_image_store import save_image_asset_bytes, save_thumbnail_bytes
 from services.upstream_openai_image_client import (
     UpstreamImageInput,
     UpstreamOpenAIImageClient,
@@ -84,6 +86,55 @@ def _task_key(owner_id: str, task_id: str) -> str:
     return f"{owner_id}:{task_id}"
 
 
+def _decode_task_image_bytes(item: dict[str, Any]) -> bytes | None:
+    b64_json = _clean(item.get("b64_json"))
+    if not b64_json:
+        return None
+    try:
+        return base64.b64decode(b64_json)
+    except Exception:
+        return None
+
+
+def _build_result_preview_images(data: list[dict[str, Any]], *, base_url: str) -> list[dict[str, Any]]:
+    previews: list[dict[str, Any]] = []
+    for index, item in enumerate(data, start=1):
+        if not isinstance(item, dict):
+            continue
+        image_bytes = _decode_task_image_bytes(item)
+        if image_bytes is None:
+            continue
+        try:
+            thumbnail_url = save_thumbnail_bytes(image_bytes, base_url=base_url, bucket="_thumbs/results")
+        except Exception:
+            continue
+        previews.append({
+            "id": f"result-{index}",
+            "thumbnail_url": thumbnail_url,
+        })
+    return previews
+
+
+def _build_source_images(images: list[UpstreamImageInput], *, base_url: str) -> list[dict[str, Any]]:
+    source_images: list[dict[str, Any]] = []
+    for index, image in enumerate(images, start=1):
+        image_data = bytes(image.get("data") or b"")
+        if not image_data:
+            continue
+        try:
+            image_url = save_image_asset_bytes(image_data, base_url=base_url, bucket="sources")
+            thumbnail_url = save_thumbnail_bytes(image_data, base_url=base_url, bucket="_thumbs/sources")
+        except Exception:
+            continue
+        source_images.append({
+            "id": f"source-{index}",
+            "filename": _clean(image.get("filename"), f"image-{index}.png"),
+            "url": image_url,
+            "thumbnail_url": thumbnail_url,
+        })
+    return source_images
+
+
 def _public_task(task: dict[str, Any], *, include_owner: bool = False, include_data: bool = True) -> dict[str, Any]:
     raw_data = task.get("data") if isinstance(task.get("data"), list) else []
     item = {
@@ -100,6 +151,10 @@ def _public_task(task: dict[str, Any], *, include_owner: bool = False, include_d
         "updated_at": task.get("updated_at"),
         "result_count": len(raw_data),
     }
+    if isinstance(task.get("preview_images"), list):
+        item["preview_images"] = task.get("preview_images")
+    if isinstance(task.get("source_images"), list):
+        item["source_images"] = task.get("source_images")
     if include_owner:
         item["owner_id"] = task.get("owner_id")
         item["owner_name"] = task.get("owner_name")
@@ -110,6 +165,32 @@ def _public_task(task: dict[str, Any], *, include_owner: bool = False, include_d
         item["data"] = task.get("data")
     if task.get("error"):
         item["error"] = task.get("error")
+    return item
+
+
+def _strip_heavy_media_fields(task: dict[str, Any]) -> dict[str, Any]:
+    item = dict(task)
+    preview_images = item.get("preview_images")
+    if isinstance(preview_images, list):
+        item["preview_images"] = [
+            {
+                "id": image.get("id"),
+                "thumbnail_url": image.get("thumbnail_url"),
+            }
+            for image in preview_images
+            if isinstance(image, dict)
+        ]
+    source_images = item.get("source_images")
+    if isinstance(source_images, list):
+        item["source_images"] = [
+            {
+                "id": image.get("id"),
+                "filename": image.get("filename"),
+                "thumbnail_url": image.get("thumbnail_url"),
+            }
+            for image in source_images
+            if isinstance(image, dict)
+        ]
     return item
 
 
@@ -176,12 +257,13 @@ class ImageTaskService:
         conversation_id: str | None = None,
         conversation_title: str | None = None,
     ) -> dict[str, Any]:
+        max_n = 10 if _owner_role(identity) == "admin" else config.max_images_per_request
         normalized_prompt, normalized_model, normalized_n, normalized_size = validate_image_request(
             prompt,
             model,
             n,
             size,
-            max_n=config.max_images_per_request,
+            max_n=max_n,
         )
         payload = {
             "prompt": normalized_prompt,
@@ -216,14 +298,16 @@ class ImageTaskService:
         conversation_id: str | None = None,
         conversation_title: str | None = None,
     ) -> dict[str, Any]:
+        max_n = 10 if _owner_role(identity) == "admin" else config.max_images_per_request
         normalized_prompt, normalized_model, normalized_n, normalized_size = validate_image_request(
             prompt,
             model,
             n,
             size,
-            max_n=config.max_images_per_request,
+            max_n=max_n,
         )
         normalized_images = normalize_image_inputs(images)
+        source_images = _build_source_images(normalized_images, base_url=base_url)
         payload = {
             "prompt": normalized_prompt,
             "model": normalized_model,
@@ -231,6 +315,7 @@ class ImageTaskService:
             "size": normalized_size,
             "base_url": base_url,
             "images": normalized_images,
+            "source_images": source_images,
             "upstream_api_url": _clean(identity.get("upstream_api_url")),
             "upstream_api_key": _clean(identity.get("upstream_api_key")),
         }
@@ -279,6 +364,66 @@ class ImageTaskService:
             items = [_public_task(task, include_owner=True) for task in self._tasks.values()]
             items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
             return {"items": items[:safe_limit], "missing_ids": []}
+
+    def list_admin_tasks(
+        self,
+        *,
+        limit: int = 200,
+        credential_query: str = "",
+        mode: str = "",
+        updated_from: str = "",
+        updated_to: str = "",
+    ) -> dict[str, Any]:
+        try:
+            safe_limit = max(1, min(int(limit), 1000))
+        except Exception:
+            safe_limit = 200
+        normalized_query = _clean(credential_query).lower()
+        normalized_mode = _clean(mode).lower()
+        updated_from_ts = _timestamp(updated_from) if _clean(updated_from) else 0.0
+        updated_to_ts = _timestamp(updated_to) if _clean(updated_to) else 0.0
+        with self._lock:
+            if self._cleanup_locked():
+                self._save_locked()
+            items = [
+                _strip_heavy_media_fields(_public_task(task, include_owner=True, include_data=False))
+                for task in self._tasks.values()
+            ]
+            items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+            filtered: list[dict[str, Any]] = []
+            for item in items:
+                if normalized_mode and _clean(item.get("mode")).lower() != normalized_mode:
+                    continue
+                if normalized_query:
+                    haystacks = (
+                        _clean(item.get("credential_id")).lower(),
+                        _clean(item.get("credential_label")).lower(),
+                        _clean(item.get("owner_id")).lower(),
+                    )
+                    if not any(normalized_query in haystack for haystack in haystacks if haystack):
+                        continue
+                updated_at_ts = _timestamp(item.get("updated_at"))
+                if updated_from_ts and updated_at_ts < updated_from_ts:
+                    continue
+                if updated_to_ts and updated_at_ts > updated_to_ts:
+                    continue
+                filtered.append(item)
+                if len(filtered) >= safe_limit:
+                    break
+            return {"items": filtered, "missing_ids": []}
+
+    def get_admin_task(self, owner_id: str, task_id: str) -> dict[str, Any] | None:
+        normalized_owner_id = _clean(owner_id)
+        normalized_task_id = _clean(task_id)
+        if not normalized_owner_id or not normalized_task_id:
+            return None
+        with self._lock:
+            if self._cleanup_locked():
+                self._save_locked()
+            task = self._tasks.get(_task_key(normalized_owner_id, normalized_task_id))
+            if task is None:
+                return None
+            return _public_task(task, include_owner=True, include_data=True)
 
     def delete_conversation(self, identity: dict[str, object], conversation_id: str) -> int:
         owner = _owner_id(identity)
@@ -348,6 +493,8 @@ class ImageTaskService:
                 "created_at": now,
                 "updated_at": now,
             }
+            if isinstance(payload.get("source_images"), list):
+                task["source_images"] = payload.get("source_images")
             self._tasks[key] = task
             self._save_locked()
         thread = threading.Thread(target=self._run_task, args=(key, handler, payload), name=f"image-task-{task_id[:16]}", daemon=True)
@@ -364,7 +511,8 @@ class ImageTaskService:
             if not isinstance(data, list) or not data:
                 message = _clean(result.get("message")) or "image task returned no image data"
                 raise RuntimeError(message)
-            self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, error="")
+            preview_images = _build_result_preview_images(data, base_url=_clean(payload.get("base_url")))
+            self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, preview_images=preview_images, error="")
         except Exception as exc:
             self._update_task(key, status=TASK_STATUS_ERROR, error=str(exc) or "image task failed", data=[])
 
@@ -419,6 +567,12 @@ class ImageTaskService:
             data = item.get("data")
             if isinstance(data, list):
                 task["data"] = data
+            preview_images = item.get("preview_images")
+            if isinstance(preview_images, list):
+                task["preview_images"] = preview_images
+            source_images = item.get("source_images")
+            if isinstance(source_images, list):
+                task["source_images"] = source_images
             error = _clean(item.get("error"))
             if error:
                 task["error"] = error

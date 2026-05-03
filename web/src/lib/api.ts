@@ -18,6 +18,7 @@ export type SettingsConfig = {
 };
 
 export type ImageTaskImage = { b64_json?: string; url?: string; revised_prompt?: string };
+export type ImageTaskPreviewImage = { id?: string; url?: string; thumbnail_url?: string; filename?: string };
 
 export type ImageTask = {
   id: string;
@@ -38,6 +39,8 @@ export type ImageTask = {
   updated_at: string;
   result_count?: number;
   data?: ImageTaskImage[];
+  preview_images?: ImageTaskPreviewImage[];
+  source_images?: ImageTaskPreviewImage[];
   error?: string;
 };
 
@@ -63,6 +66,10 @@ export type SettingsResponse = {
   subject_id?: string;
   name?: string;
   session_token?: string;
+};
+
+type AdminImageTaskDetailResponse = {
+  item: ImageTask;
 };
 
 export async function login(upstreamApiUrl: string, upstreamApiKey: string) {
@@ -163,8 +170,36 @@ export async function clearImageTaskHistory() {
   });
 }
 
-export async function fetchAdminImageTasks(limit = 200) {
-  return httpRequest<ImageTaskListResponse>(`/api/admin/image-tasks?limit=${encodeURIComponent(String(limit))}`);
+export async function fetchAdminImageTasks(options?: {
+  limit?: number;
+  credentialQuery?: string;
+  mode?: "generate" | "edit";
+  updatedFrom?: string;
+  updatedTo?: string;
+}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(options?.limit || 200));
+  if (options?.credentialQuery) {
+    params.set("credential_query", options.credentialQuery);
+  }
+  if (options?.mode) {
+    params.set("mode", options.mode);
+  }
+  if (options?.updatedFrom) {
+    params.set("updated_from", options.updatedFrom);
+  }
+  if (options?.updatedTo) {
+    params.set("updated_to", options.updatedTo);
+  }
+  return httpRequest<ImageTaskListResponse>(`/api/admin/image-tasks?${params.toString()}`);
+}
+
+export async function fetchAdminImageTaskDetail(ownerId: string, taskId: string) {
+  const params = new URLSearchParams({
+    owner_id: String(ownerId || "").trim(),
+    task_id: String(taskId || "").trim(),
+  });
+  return httpRequest<AdminImageTaskDetailResponse>(`/api/admin/image-tasks/detail?${params.toString()}`);
 }
 
 export async function fetchSettingsConfig() {
