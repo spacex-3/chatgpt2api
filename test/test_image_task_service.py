@@ -172,6 +172,28 @@ class ImageTaskServiceTests(unittest.TestCase):
         self.assertEqual(captured_payload["upstream_api_url"], OWNER["upstream_api_url"])
         self.assertEqual(captured_payload["upstream_api_key"], OWNER["upstream_api_key"])
 
+    def test_submit_generation_keeps_raw_prompt_in_service_payload_and_history(self):
+        captured_payload: dict[str, object] = {}
+
+        def generation_handler(payload):
+            captured_payload.update(payload)
+            return {"data": [{"url": "http://example.test/1.png"}]}
+
+        service = self.make_service(generation_handler=generation_handler)
+        service.submit_generation(
+            OWNER,
+            client_task_id="task-1",
+            prompt="我的头发是白色的",
+            model="gpt-image-2",
+            n=1,
+            size=None,
+            base_url="http://local.test",
+        )
+        finished = wait_for_task(service, OWNER, "task-1", "success")
+
+        self.assertEqual(captured_payload["prompt"], "我的头发是白色的")
+        self.assertEqual(finished["prompt"], "我的头发是白色的")
+
     def test_delete_conversation_only_removes_matching_owner_records(self):
         service = self.make_service()
         for task_id in ("task-1", "task-2"):

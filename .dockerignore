@@ -2,13 +2,20 @@
 .gitignore
 .idea
 .venv
-__pycache__
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
+.monitor/
+.tmp-*
+codex_task_*.md
+.env
+.env.*
+data/
 
-web/.next
-web/node_modules
+web/.next/
+web/node_modules/
+web/out/
 
 assets
 README.md

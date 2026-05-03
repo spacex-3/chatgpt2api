@@ -9,6 +9,7 @@ export type SettingsConfig = {
   upstream_api_key: string;
   upstream_api_key_masked?: string;
   upstream_api_key_configured?: boolean;
+  env_managed_fields?: string[];
   proxy: string;
   base_url?: string;
   image_retention_days?: number | string;

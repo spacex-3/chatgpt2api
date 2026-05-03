@@ -20,7 +20,11 @@ export function ConfigCard() {
   const setImageRetentionDays = useSettingsStore((state) => state.setImageRetentionDays);
   const setMaxImagesPerRequest = useSettingsStore((state) => state.setMaxImagesPerRequest);
   const saveConfig = useSettingsStore((state) => state.saveConfig);
-  const adminApiKeyHint = String(config?.upstream_api_key || "").trim()
+  const envManagedFields = new Set(config?.env_managed_fields || []);
+  const isEnvManaged = (field: string) => scope === "admin" && envManagedFields.has(field);
+  const adminApiKeyHint = isEnvManaged("upstream_api_key")
+    ? `当前由环境变量控制${config?.upstream_api_key_masked ? `（${config.upstream_api_key_masked}）` : ""}，需修改部署环境并重启容器后生效。`
+    : String(config?.upstream_api_key || "").trim()
     ? "已输入新的 API Key，保存后会替换当前已配置值。"
     : config?.upstream_api_key_configured
       ? `当前已配置 ${config.upstream_api_key_masked || "API Key"}；留空则保持原值。`
@@ -46,6 +50,11 @@ export function ConfigCard() {
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
+          {scope === "admin" && envManagedFields.size > 0 ? (
+            <div className="md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+              部分全局项当前由环境变量控制，界面内已锁定；如需修改，请更新部署环境后重启容器。
+            </div>
+          ) : null}
           <div className="space-y-2 md:col-span-2">
             <label className="text-sm text-stone-700">上游 API URL</label>
             <Input
@@ -53,6 +62,7 @@ export function ConfigCard() {
               onChange={(event) => setUpstreamApiUrl(event.target.value)}
               placeholder="https://your-newapi.example.com/v1"
               className="h-10 rounded-xl border-stone-200 bg-white"
+              disabled={isEnvManaged("upstream_api_url")}
             />
             <p className="text-xs text-stone-500">
               {scope === "admin" ? "保存时会自动校验这组上游凭据是否可用。" : "保存后会刷新你当前用户会话使用的上游地址。"}
@@ -67,6 +77,7 @@ export function ConfigCard() {
               onChange={(event) => setUpstreamApiKey(event.target.value)}
               placeholder="sk-..."
               className="h-10 rounded-xl border-stone-200 bg-white"
+              disabled={isEnvManaged("upstream_api_key")}
             />
             {scope === "admin" ? <p className="text-xs text-stone-500">{adminApiKeyHint}</p> : null}
           </div>
@@ -80,6 +91,7 @@ export function ConfigCard() {
                   onChange={(event) => setBaseUrl(event.target.value)}
                   placeholder="https://example.com"
                   className="h-10 rounded-xl border-stone-200 bg-white"
+                  disabled={isEnvManaged("base_url")}
                 />
                 <p className="text-xs text-stone-500">留空时默认使用当前站点地址拼接本地图片 URL。</p>
               </div>
@@ -91,6 +103,7 @@ export function ConfigCard() {
                   onChange={(event) => setProxy(event.target.value)}
                   placeholder="http://127.0.0.1:7890"
                   className="h-10 rounded-xl border-stone-200 bg-white"
+                  disabled={isEnvManaged("proxy")}
                 />
                 <p className="text-xs text-stone-500">可选，用于访问上游 NewAPI / OpenAI 兼容绘图接口。</p>
               </div>
@@ -102,6 +115,7 @@ export function ConfigCard() {
                   onChange={(event) => setImageRetentionDays(event.target.value)}
                   placeholder="30"
                   className="h-10 rounded-xl border-stone-200 bg-white"
+                  disabled={isEnvManaged("image_retention_days")}
                 />
                 <p className="text-xs text-stone-500">自动清理本地缓存图片的保留天数。</p>
               </div>
@@ -116,6 +130,7 @@ export function ConfigCard() {
                   onChange={(event) => setMaxImagesPerRequest(event.target.value)}
                   placeholder="10"
                   className="h-10 rounded-xl border-stone-200 bg-white"
+                  disabled={isEnvManaged("max_images_per_request")}
                 />
                 <p className="text-xs text-stone-500">允许范围 1～10，前台提交数量会按这里的上限限制。</p>
               </div>

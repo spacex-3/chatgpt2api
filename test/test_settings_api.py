@@ -24,6 +24,7 @@ class FakeConfig:
             "image_retention_days": 30,
             "max_images_per_request": 10,
         }
+        self.env_managed_fields: dict[str, str] = {}
 
     @property
     def base_url(self) -> str:
@@ -46,11 +47,15 @@ class FakeConfig:
             "upstream_api_key": "",
             "upstream_api_key_configured": True,
             "upstream_api_key_masked": "sk-...dmin",
+            "env_managed_fields": sorted(self.env_managed_fields.keys()),
         }
 
     def update(self, data: dict[str, object]) -> dict[str, object]:
         self.data.update(data)
         return self.get()
+
+    def get_env_managed_fields(self) -> dict[str, str]:
+        return dict(self.env_managed_fields)
 
 
 @unittest.skipIf(FastAPI is None or TestClient is None, "fastapi test dependencies are not installed")
@@ -97,6 +102,24 @@ class SettingsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["config"]["max_images_per_request"], 3)
         self.assertEqual(self.fake_config.max_images_per_request, 3)
+
+    def test_admin_cannot_override_env_managed_max_images_per_request(self) -> None:
+        admin_identity = {"id": "admin", "name": "系统管理员", "role": "admin"}
+        self.fake_config.env_managed_fields = {"max_images_per_request": "CHATGPT2API_MAX_IMAGES_PER_REQUEST"}
+        self.fake_config.data["max_images_per_request"] = 4
+        with mock.patch.object(system_api, "require_identity", return_value=admin_identity), mock.patch.object(
+            system_api,
+            "require_admin",
+            return_value=admin_identity,
+        ), mock.patch.object(system_api, "config", self.fake_config):
+            response = self.client.post(
+                "/api/settings",
+                json={"max_images_per_request": 3},
+                headers={"Authorization": "Bearer token"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("CHATGPT2API_MAX_IMAGES_PER_REQUEST", response.json()["detail"]["error"])
 
 
 if __name__ == "__main__":

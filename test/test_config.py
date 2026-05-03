@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from services.config import ConfigStore, _read_json_object
 
@@ -65,6 +67,30 @@ class ConfigLoadingTests(unittest.TestCase):
             store = ConfigStore(path)
 
             self.assertEqual(store.max_images_per_request, 10)
+
+    def test_max_images_per_request_can_be_overridden_by_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir, mock.patch.dict(
+            os.environ,
+            {"CHATGPT2API_MAX_IMAGES_PER_REQUEST": "4"},
+            clear=False,
+        ):
+            path = Path(tmp_dir) / "config.json"
+            path.write_text(json.dumps({"max_images_per_request": 9}), encoding="utf-8")
+
+            store = ConfigStore(path)
+
+            self.assertEqual(store.max_images_per_request, 4)
+
+    def test_config_store_can_migrate_legacy_root_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "data" / "config.json"
+            legacy_path = Path(tmp_dir) / "config.json"
+            legacy_path.write_text(json.dumps({"base_url": "https://legacy.test"}), encoding="utf-8")
+
+            store = ConfigStore(data_path, legacy_path=legacy_path)
+
+            self.assertEqual(store.base_url, "https://legacy.test")
+            self.assertTrue(data_path.exists())
 
 
 if __name__ == "__main__":

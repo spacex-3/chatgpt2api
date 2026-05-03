@@ -40,6 +40,16 @@ class AdminLoginRequest(BaseModel):
     password: str | None = None
 
 
+def _normalize_admin_setting_value(field: str, value: object) -> object:
+    if field in {"upstream_api_url", "base_url"}:
+        return str(value or "").strip().rstrip("/")
+    if field in {"upstream_api_key", "proxy"}:
+        return str(value or "").strip()
+    if field in {"image_retention_days", "max_images_per_request"}:
+        return int(value or 0)
+    return value
+
+
 def _validate_upstream_or_raise(api_url: str, api_key: str) -> UpstreamOpenAIImageClient:
     if not api_url:
         raise HTTPException(status_code=400, detail={"error": "upstream_api_url is required"})
@@ -192,6 +202,19 @@ def create_router(app_version: str) -> APIRouter:
             "image_retention_days": body.image_retention_days if body.image_retention_days is not None else current.get("image_retention_days"),
             "max_images_per_request": body.max_images_per_request if body.max_images_per_request is not None else current.get("max_images_per_request"),
         }
+        env_managed_fields = config.get_env_managed_fields()
+        conflicting_env_fields = [
+            field
+            for field in env_managed_fields
+            if _normalize_admin_setting_value(field, next_values.get(field))
+            != _normalize_admin_setting_value(field, current.get(field))
+        ]
+        if conflicting_env_fields:
+            detail = ", ".join(f"{field} ({env_managed_fields[field]})" for field in conflicting_env_fields)
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"settings managed by environment variables cannot be changed here: {detail}"},
+            )
         next_api_url = str(next_values.get("upstream_api_url") or "").strip()
         next_api_key = str(next_values.get("upstream_api_key") or "").strip()
         if not next_api_url or not next_api_key:

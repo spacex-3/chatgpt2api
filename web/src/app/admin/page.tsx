@@ -59,6 +59,9 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     upstream_api_key: String(config.upstream_api_key || ""),
     upstream_api_key_masked: String(config.upstream_api_key_masked || ""),
     upstream_api_key_configured: Boolean(config.upstream_api_key_configured),
+    env_managed_fields: Array.isArray(config.env_managed_fields)
+      ? config.env_managed_fields.filter((item): item is string => typeof item === "string")
+      : [],
     proxy: String(config.proxy || ""),
     base_url: String(config.base_url || ""),
     image_retention_days: Number(config.image_retention_days || 30),
@@ -99,7 +102,11 @@ function AdminPageContent() {
     error: tasks.filter((item) => item.status === "error").length,
     running: tasks.filter((item) => item.status === "queued" || item.status === "running").length,
   }), [tasks]);
-  const adminApiKeyHint = String(config?.upstream_api_key || "").trim()
+  const envManagedFields = useMemo(() => new Set(config?.env_managed_fields || []), [config?.env_managed_fields]);
+  const isEnvManaged = (field: string) => envManagedFields.has(field);
+  const adminApiKeyHint = isEnvManaged("upstream_api_key")
+    ? `当前由环境变量控制${config?.upstream_api_key_masked ? `（${config.upstream_api_key_masked}）` : ""}，需修改部署环境并重启容器后生效。`
+    : String(config?.upstream_api_key || "").trim()
     ? "已输入新的 API Key，保存后会替换当前已配置值。"
     : config?.upstream_api_key_configured
       ? `当前已配置 ${config.upstream_api_key_masked || "API Key"}；留空则保持原值。`
@@ -167,6 +174,11 @@ function AdminPageContent() {
           </Button>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
+          {envManagedFields.size > 0 ? (
+            <div className="md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+              部分全局项当前由环境变量控制，界面内已锁定；如需修改，请更新部署环境后重启容器。
+            </div>
+          ) : null}
           <div className="space-y-2 md:col-span-2">
             <label className="text-sm text-stone-700">上游 API URL</label>
             <Input
@@ -174,6 +186,7 @@ function AdminPageContent() {
               onChange={(event) => setConfig((prev) => prev ? { ...prev, upstream_api_url: event.target.value } : prev)}
               placeholder="https://your-newapi.example.com/v1"
               className="h-10 rounded-xl border-stone-200 bg-white"
+              disabled={isEnvManaged("upstream_api_url")}
             />
           </div>
           <div className="space-y-2 md:col-span-2">
@@ -184,6 +197,7 @@ function AdminPageContent() {
               onChange={(event) => setConfig((prev) => prev ? { ...prev, upstream_api_key: event.target.value } : prev)}
               placeholder="sk-..."
               className="h-10 rounded-xl border-stone-200 bg-white"
+              disabled={isEnvManaged("upstream_api_key")}
             />
             <p className="text-xs text-stone-500">{adminApiKeyHint}</p>
           </div>
@@ -194,6 +208,7 @@ function AdminPageContent() {
               onChange={(event) => setConfig((prev) => prev ? { ...prev, base_url: event.target.value } : prev)}
               placeholder="https://example.com"
               className="h-10 rounded-xl border-stone-200 bg-white"
+              disabled={isEnvManaged("base_url")}
             />
           </div>
           <div className="space-y-2">
@@ -203,6 +218,7 @@ function AdminPageContent() {
               onChange={(event) => setConfig((prev) => prev ? { ...prev, proxy: event.target.value } : prev)}
               placeholder="http://127.0.0.1:7890"
               className="h-10 rounded-xl border-stone-200 bg-white"
+              disabled={isEnvManaged("proxy")}
             />
           </div>
           <div className="space-y-2">
@@ -212,6 +228,7 @@ function AdminPageContent() {
               onChange={(event) => setConfig((prev) => prev ? { ...prev, image_retention_days: event.target.value } : prev)}
               placeholder="30"
               className="h-10 rounded-xl border-stone-200 bg-white"
+              disabled={isEnvManaged("image_retention_days")}
             />
           </div>
           <div className="space-y-2">
@@ -224,6 +241,7 @@ function AdminPageContent() {
               onChange={(event) => setConfig((prev) => prev ? { ...prev, max_images_per_request: event.target.value } : prev)}
               placeholder="10"
               className="h-10 rounded-xl border-stone-200 bg-white"
+              disabled={isEnvManaged("max_images_per_request")}
             />
             <p className="text-xs text-stone-500">允许范围 1～10，前台提交数量会按这里的上限限制。</p>
           </div>

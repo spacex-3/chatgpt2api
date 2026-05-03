@@ -19,6 +19,7 @@ from services.proxy_service import proxy_settings
 
 SUPPORTED_IMAGE_MODEL = "gpt-image-2"
 ALLOWED_IMAGE_SIZES = {"auto", "1024x1024", "1536x1024", "1024x1536"}
+IMAGE_PROMPT_PREFIXES = ("画图：", "画图:")
 
 
 class UpstreamImageInput(TypedDict):
@@ -43,6 +44,15 @@ def build_upstream_url(api_url: str, path: str) -> str:
     if base.endswith("/v1"):
         return f"{base}{suffix}"
     return f"{base}/v1{suffix}"
+
+
+def build_upstream_image_prompt(value: object) -> str:
+    prompt = str(value or "").strip()
+    if not prompt:
+        raise ValueError("prompt is required")
+    if prompt.startswith(IMAGE_PROMPT_PREFIXES):
+        return prompt
+    return f"画图：{prompt}"
 
 
 def validate_image_request(
@@ -327,7 +337,7 @@ class UpstreamOpenAIImageClient:
         return [result for result in results if isinstance(result, dict)]
 
     def _generate_once(self, *, prompt: str, model: str, size: str | None, base_url: str | None) -> dict[str, Any]:
-        payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
+        payload: dict[str, Any] = {"model": model, "prompt": build_upstream_image_prompt(prompt), "n": 1}
         if size:
             payload["size"] = size
         raw = self._post_json(
@@ -348,7 +358,7 @@ class UpstreamOpenAIImageClient:
         images: list[UpstreamImageInput],
         base_url: str | None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
+        payload: dict[str, Any] = {"model": model, "prompt": build_upstream_image_prompt(prompt), "n": 1}
         if size:
             payload["size"] = size
         if CurlMime is None:

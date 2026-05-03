@@ -6,16 +6,15 @@ dist/
 wheels/
 *.egg-info
 web_dist
-# Virtual environments
+
+# Virtual environments / editor files
 .venv
 .idea
-data
-config.json
-edit
-
-docker-compose-local.yml
-
 .claude/settings.local.json
+
+# Runtime data
+/data/
+edit
 
 # Environment variables
 .env
@@ -28,3 +27,14 @@ docker-compose-local.yml
 
 # Git cache
 git_cache/
+
+# Local build outputs
+web/.next/
+web/out/
+web/node_modules/
+
+# Local temporary / test artifacts
+.monitor/
+.tmp-*
+.tmp-test-data/
+codex_task_*.md

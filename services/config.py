@@ -9,9 +9,18 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
-CONFIG_FILE = BASE_DIR / "config.json"
+CONFIG_FILE = DATA_DIR / "config.json"
+LEGACY_CONFIG_FILE = BASE_DIR / "config.json"
 VERSION_FILE = BASE_DIR / "VERSION"
 SESSION_SECRET_FILE = DATA_DIR / "session_secret.txt"
+ENV_FIELD_NAMES = {
+    "upstream_api_url": "CHATGPT2API_UPSTREAM_API_URL",
+    "upstream_api_key": "CHATGPT2API_UPSTREAM_API_KEY",
+    "proxy": "CHATGPT2API_PROXY",
+    "base_url": "CHATGPT2API_BASE_URL",
+    "image_retention_days": "CHATGPT2API_IMAGE_RETENTION_DAYS",
+    "max_images_per_request": "CHATGPT2API_MAX_IMAGES_PER_REQUEST",
+}
 
 
 def _clean(value: object) -> str:
@@ -53,15 +62,27 @@ def _read_json_object(path: Path, *, name: str) -> dict[str, object]:
 
 
 class ConfigStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, legacy_path: Path | None = None):
         self.path = path
+        self.legacy_path = legacy_path
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.data = self._load()
 
     def _load(self) -> dict[str, object]:
-        return _read_json_object(self.path, name="config.json")
+        loaded = _read_json_object(self.path, name="config.json")
+        if loaded or self.path.exists():
+            return loaded
+        if self.legacy_path is None:
+            return {}
+        legacy = _read_json_object(self.legacy_path, name="legacy config.json")
+        if not legacy:
+            return {}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(legacy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return legacy
 
     def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     @property
@@ -109,7 +130,20 @@ class ConfigStore:
 
     @property
     def max_images_per_request(self) -> int:
-        return min(10, _normalize_positive_int(self.data.get("max_images_per_request"), 10))
+        return min(
+            10,
+            _normalize_positive_int(
+                os.getenv("CHATGPT2API_MAX_IMAGES_PER_REQUEST") or self.data.get("max_images_per_request"),
+                10,
+            ),
+        )
+
+    def get_env_managed_fields(self) -> dict[str, str]:
+        return {
+            field: env_name
+            for field, env_name in ENV_FIELD_NAMES.items()
+            if _clean(os.getenv(env_name))
+        }
 
     @property
     def images_dir(self) -> Path:
@@ -157,6 +191,7 @@ class ConfigStore:
             "upstream_api_key": "",
             "upstream_api_key_configured": bool(_clean(current.get("upstream_api_key"))),
             "upstream_api_key_masked": mask_api_key(current.get("upstream_api_key")),
+            "env_managed_fields": sorted(self.get_env_managed_fields().keys()),
         }
 
     def get_proxy_settings(self) -> str:
@@ -183,5 +218,4 @@ class ConfigStore:
         self._save()
         return self.get()
 
-
-config = ConfigStore(CONFIG_FILE)
+config = ConfigStore(CONFIG_FILE, legacy_path=LEGACY_CONFIG_FILE)

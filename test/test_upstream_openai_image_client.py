@@ -6,6 +6,7 @@ from unittest.mock import patch
 from services.image_errors import ImageGenerationError
 from services.upstream_openai_image_client import (
     UpstreamOpenAIImageClient,
+    build_upstream_image_prompt,
     build_upstream_url,
     normalize_image_inputs,
     normalize_upstream_api_url,
@@ -22,6 +23,11 @@ class UpstreamClientHelperTests(unittest.TestCase):
 
     def test_build_upstream_url_without_v1_suffix(self):
         self.assertEqual(build_upstream_url("https://example.com", "/images/generations"), "https://example.com/v1/images/generations")
+
+    def test_build_upstream_image_prompt_adds_prefix_once(self):
+        self.assertEqual(build_upstream_image_prompt("我的头发是白色的"), "画图：我的头发是白色的")
+        self.assertEqual(build_upstream_image_prompt("画图：我的头发是白色的"), "画图：我的头发是白色的")
+        self.assertEqual(build_upstream_image_prompt("画图:我的头发是白色的"), "画图:我的头发是白色的")
 
     def test_invalid_upstream_api_url(self):
         with self.assertRaises(ValueError):
@@ -169,6 +175,47 @@ class UpstreamClientBehaviorTests(unittest.TestCase):
             "http://example.test/3.png",
             "http://example.test/4.png",
         })
+
+    def test_generate_once_sends_prefixed_prompt_to_upstream(self):
+        client = self.make_client()
+        captured: dict[str, object] = {}
+
+        def fake_post_json(*args, **kwargs):
+            captured.update(kwargs.get("json_payload") or {})
+            return {"created": 100, "data": []}
+
+        with patch.object(client, "_post_json", side_effect=fake_post_json):
+            client._generate_once(prompt="我的头发是白色的", model="gpt-image-2", size=None, base_url="http://local.test")
+
+        self.assertEqual(captured["prompt"], "画图：我的头发是白色的")
+
+    def test_edit_once_sends_prefixed_prompt_to_upstream(self):
+        client = self.make_client()
+        captured: dict[str, object] = {}
+        images = [{"filename": "a.png", "content_type": "image/png", "data": b"123"}]
+
+        class FakeMime:
+            def addpart(self, **kwargs):
+                return None
+
+        def fake_post_json(*args, **kwargs):
+            captured.update(kwargs.get("form_payload") or {})
+            return {"created": 100, "data": []}
+
+        with patch("services.upstream_openai_image_client.CurlMime", FakeMime), patch.object(
+            client,
+            "_post_json",
+            side_effect=fake_post_json,
+        ):
+            client._edit_once(
+                prompt="我的头发是白色的",
+                model="gpt-image-2",
+                size=None,
+                images=images,
+                base_url="http://local.test",
+            )
+
+        self.assertEqual(captured["prompt"], "画图：我的头发是白色的")
 
 
 if __name__ == "__main__":

@@ -26,7 +26,8 @@
 
 - 上游：NewAPI 转出的标准 OpenAI 绘图接口
 - 固定模型：`gpt-image-2`
-- 单次生成 / 编辑数量上限：`10`
+- 单次生成 / 编辑数量上限：默认 `10`
+  - 管理员可通过 `max_images_per_request` 配置为 `1~10`
   - 当数量 `>1` 时，平台会在服务端拆成多个 **并发的 `n=1` 上游请求** 后再聚合结果，避免把多图 `n` 直接透传给兼容性不稳定的上游
   - 若上游个别 `n=1` 子请求意外返回多于 1 张图，平台会保留并返回这些额外图片；仅在总返回数少于请求下限时才判失败
 - Web 尺寸选项：`auto`、`1024x1024`、`1536x1024`、`1024x1536`
@@ -34,12 +35,31 @@
 ## 快速开始
 
 ```bash
-git clone git@github.com:basketikun/chatgpt2api.git
-cd chatgpt2api
 docker compose up -d
 ```
 
 启动后访问：
+
+- Web：`http://localhost:3000`
+- 版本：`http://localhost:3000/version`
+
+## Compose / 环境变量说明
+
+- 仓库当前可直接执行 `docker compose up -d` 启动，**`.env` 不是必需**。
+- 主 compose 现在只挂载 `./data:/app/data`，**不再依赖 repo root `config.json`**。
+- 管理员在页面里保存的全局设置会持久化到 `data/config.json`。
+- 只有在你想预置管理员密码、全局 upstream 配置，或覆盖默认保留天数 / 会话密钥 / 单次最多生成张数时，才需要从 `.env.example` 复制出 `.env`。
+- 若某个全局项已由环境变量显式提供，则运行时会以环境变量为准，管理界面会将该字段锁定为只读。
+- `docker-compose.yml` 使用远程镜像：`ghcr.io/spacex-3/chatgpt2api:latest`
+- `docker-compose.local.yml` 使用本地 `Dockerfile` 构建镜像，便于本地改代码调试。
+
+如需本地构建镜像而不是直接拉取 GHCR 镜像，可使用：
+
+```bash
+docker compose -f docker-compose.local.yml up -d --build
+```
+
+此时默认访问：
 
 - Web：`http://localhost:8000`
 - 版本：`http://localhost:8000/version`
@@ -63,11 +83,14 @@ docker compose up -d
 
 管理员通过登录页的“管理员”入口，使用环境变量 `CHATGPT2API_ADMIN_PASSWORD` 登录。
 
+若未设置 `CHATGPT2API_ADMIN_PASSWORD`，则仍可正常启动普通用户工作台，但不能使用管理员登录。
+
 管理员登录后：
 
 - 可访问 `/admin`
 - 可查看全部图片任务记录
-- 可维护全局 `upstream_api_url / upstream_api_key / proxy / base_url / image_retention_days`
+- 可维护全局 `upstream_api_url / upstream_api_key / proxy / base_url / image_retention_days / max_images_per_request`
+- 未被环境变量锁定的全局项会持久化到 `data/config.json`
 
 ## 基础设置
 
@@ -83,20 +106,9 @@ docker compose up -d
 - `proxy`
 - `base_url`
 - `image_retention_days`
+- `max_images_per_request`
 
-默认配置文件：`./config.json`
-
-```json
-{
-  "upstream_api_url": "",
-  "upstream_api_key": "",
-  "image_retention_days": 15,
-  "proxy": "",
-  "base_url": ""
-}
-```
-
-管理员密码不写入 `config.json`，只通过环境变量提供：
+管理员密码不写入 `data/config.json`，只通过环境变量提供：
 
 ```bash
 CHATGPT2API_ADMIN_PASSWORD=change_me
@@ -119,6 +131,22 @@ CHATGPT2API_ADMIN_PASSWORD=change_me
 - 服务端会尽量把上游返回的图片结果落到本地 `data/images/`
 - `base_url` 用于生成可访问的图片 URL
 - `image_retention_days` 用于自动清理过期缓存
+- 管理员保存的全局配置默认落到 `data/config.json`
+
+## 其他环境变量补充
+
+当前运行中的 Web / Compose 只会读取以下运行时环境变量：
+
+- `CHATGPT2API_ADMIN_PASSWORD`
+- `CHATGPT2API_SESSION_SECRET`
+- `CHATGPT2API_UPSTREAM_API_URL`
+- `CHATGPT2API_UPSTREAM_API_KEY`
+- `CHATGPT2API_PROXY`
+- `CHATGPT2API_BASE_URL`
+- `CHATGPT2API_IMAGE_RETENTION_DAYS`
+- `CHATGPT2API_MAX_IMAGES_PER_REQUEST`
+
+仓库里仍有 `STORAGE_BACKEND`、`DATABASE_URL`、`GIT_REPO_URL`、`GIT_TOKEN`、`GIT_BRANCH`、`GIT_FILE_PATH` 这些变量的读取代码，但它们目前仅用于 `scripts/migrate_storage.py` / `scripts/test_storage.py` 辅助脚本，不是当前 image workspace 的 compose 运行时必需项。
 
 ## 主要代码入口
 

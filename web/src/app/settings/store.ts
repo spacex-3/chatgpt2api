@@ -12,6 +12,9 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     upstream_api_key: typeof config.upstream_api_key === "string" ? config.upstream_api_key : "",
     upstream_api_key_masked: typeof config.upstream_api_key_masked === "string" ? config.upstream_api_key_masked : "",
     upstream_api_key_configured: Boolean(config.upstream_api_key_configured),
+    env_managed_fields: Array.isArray(config.env_managed_fields)
+      ? config.env_managed_fields.filter((item): item is string => typeof item === "string")
+      : [],
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
     image_retention_days: Number(config.image_retention_days || 30),
