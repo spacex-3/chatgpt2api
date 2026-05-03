@@ -12,6 +12,7 @@ export type SettingsConfig = {
   proxy: string;
   base_url?: string;
   image_retention_days?: number | string;
+  max_images_per_request?: number | string;
   model?: ImageModel;
 };
 
@@ -71,6 +72,7 @@ export async function login(upstreamApiUrl: string, upstreamApiKey: string) {
       upstream_api_key: String(upstreamApiKey || "").trim(),
     },
     redirectOnUnauthorized: false,
+    withStoredAuthKey: false,
   });
 }
 
@@ -81,6 +83,7 @@ export async function adminLogin(password: string) {
       password: String(password || "").trim(),
     },
     redirectOnUnauthorized: false,
+    withStoredAuthKey: false,
   });
 }
 

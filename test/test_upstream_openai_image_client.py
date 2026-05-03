@@ -39,6 +39,10 @@ class UpstreamClientHelperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "between 1 and 10"):
             validate_image_request("cat", "gpt-image-2", 11, None)
 
+    def test_validate_image_request_rejects_n_above_configured_max(self):
+        with self.assertRaisesRegex(ValueError, "between 1 and 4"):
+            validate_image_request("cat", "gpt-image-2", 5, None, max_n=4)
+
     def test_normalize_image_inputs_rejects_empty_value(self):
         with self.assertRaisesRegex(ValueError, "image is required"):
             normalize_image_inputs([])

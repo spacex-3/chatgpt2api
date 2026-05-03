@@ -22,6 +22,7 @@ import {
   createImageEditTask,
   createImageGenerationTask,
   deleteImageTaskConversation,
+  fetchSettingsConfig,
   fetchImageTasks,
   type ImageTask,
 } from "@/lib/api";
@@ -47,8 +48,9 @@ const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
 const NEW_TASK_MISSING_GRACE_MS = 15000;
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 160;
 
-function clampImageCount(value: string) {
-  return String(Math.min(10, Math.max(1, Math.floor(Number(value) || 1))));
+function clampImageCount(value: string, maxCount = 10) {
+  const allowedMax = Math.max(1, Math.min(10, Math.floor(Number(maxCount) || 10)));
+  return String(Math.min(allowedMax, Math.max(1, Math.floor(Number(value) || 1))));
 }
 
 function buildConversationTitle(prompt: string) {
@@ -455,6 +457,7 @@ function ImagePageContent() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
   const [imageSize, setImageSize] = useState("");
+  const [maxImageCount, setMaxImageCount] = useState(10);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
@@ -468,7 +471,7 @@ function ImagePageContent() {
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: "one"; id: string } | { type: "all" } | null>(null);
 
-  const parsedCount = useMemo(() => Number(clampImageCount(imageCount)), [imageCount]);
+  const parsedCount = useMemo(() => Number(clampImageCount(imageCount, maxImageCount)), [imageCount, maxImageCount]);
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) ?? null,
     [conversations, selectedConversationId],
@@ -563,8 +566,20 @@ function ImagePageContent() {
       try {
         const storedSize = typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_SIZE_STORAGE_KEY) : null;
         const storedCount = typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_COUNT_STORAGE_KEY) : null;
+        let allowedMaxImageCount = 10;
+        try {
+          const settingsData = await fetchSettingsConfig();
+          allowedMaxImageCount = Math.max(1, Math.min(10, Number(settingsData.config.max_images_per_request) || 10));
+        } catch {
+          allowedMaxImageCount = 10;
+        }
+        setMaxImageCount(allowedMaxImageCount);
         setImageSize(storedSize || "");
-        setImageCount(storedCount ? clampImageCount(storedCount) : "1");
+        const nextImageCount = storedCount ? clampImageCount(storedCount, allowedMaxImageCount) : "1";
+        setImageCount(nextImageCount);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(IMAGE_COUNT_STORAGE_KEY, nextImageCount);
+        }
 
         let nextItems: ImageConversation[] = [];
         try {
@@ -730,6 +745,10 @@ function ImagePageContent() {
     }
     window.localStorage.removeItem(IMAGE_SIZE_STORAGE_KEY);
   }, [imageSize]);
+
+  useEffect(() => {
+    setImageCount((current) => (current ? clampImageCount(current, maxImageCount) : current));
+  }, [maxImageCount]);
 
   useEffect(() => {
     if (typeof window !== "undefined" && parsedCount > 0) {
@@ -1096,6 +1115,7 @@ function ImagePageContent() {
           <ImageComposer
             prompt={imagePrompt}
             imageCount={imageCount}
+            maxImageCount={maxImageCount}
             imageSize={imageSize}
             modelLabel="gpt-image-2"
             activeTaskCount={activeTaskCount}
@@ -1103,7 +1123,7 @@ function ImagePageContent() {
             textareaRef={textareaRef}
             fileInputRef={fileInputRef}
             onPromptChange={setImagePrompt}
-            onImageCountChange={(value) => setImageCount(value ? clampImageCount(value) : "")}
+            onImageCountChange={(value) => setImageCount(value ? clampImageCount(value, maxImageCount) : "")}
             onImageSizeChange={setImageSize}
             onSubmit={handleSubmit}
             onPickReferenceImage={() => fileInputRef.current?.click()}

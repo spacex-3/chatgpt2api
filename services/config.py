@@ -108,6 +108,10 @@ class ConfigStore:
         )
 
     @property
+    def max_images_per_request(self) -> int:
+        return min(10, _normalize_positive_int(self.data.get("max_images_per_request"), 10))
+
+    @property
     def images_dir(self) -> Path:
         path = DATA_DIR / "images"
         path.mkdir(parents=True, exist_ok=True)
@@ -142,6 +146,7 @@ class ConfigStore:
             "proxy": self.proxy,
             "base_url": self.base_url,
             "image_retention_days": self.image_retention_days,
+            "max_images_per_request": self.max_images_per_request,
             "model": "gpt-image-2",
         }
 
@@ -169,6 +174,11 @@ class ConfigStore:
             next_data["base_url"] = _clean(data.get("base_url")).rstrip("/")
         if "image_retention_days" in data:
             next_data["image_retention_days"] = _normalize_positive_int(data.get("image_retention_days"), self.image_retention_days)
+        if "max_images_per_request" in data:
+            next_data["max_images_per_request"] = min(
+                10,
+                _normalize_positive_int(data.get("max_images_per_request"), self.max_images_per_request),
+            )
         self.data = next_data
         self._save()
         return self.get()

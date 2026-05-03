@@ -7,6 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.support import require_admin, require_identity, resolve_image_base_url
+from services.config import config
 from services.image_task_service import image_task_service
 from services.upstream_openai_image_client import UpstreamImageInput
 
@@ -29,13 +30,14 @@ def _parse_task_ids(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _parse_n_or_raise(value: object) -> int:
+def _parse_n_or_raise(value: object, *, max_n: int = 10) -> int:
+    allowed_max = max(1, min(10, int(max_n or 10)))
     try:
         normalized = int(value or 1)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail={"error": "n must be an integer"}) from exc
-    if normalized < 1 or normalized > 10:
-        raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 10"})
+    if normalized < 1 or normalized > allowed_max:
+        raise HTTPException(status_code=400, detail={"error": f"n must be between 1 and {allowed_max}"})
     return normalized
 
 
@@ -78,6 +80,7 @@ def create_router() -> APIRouter:
         authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
+        parsed_n = _parse_n_or_raise(body.n, max_n=config.max_images_per_request)
         try:
             return await run_in_threadpool(
                 image_task_service.submit_generation,
@@ -85,7 +88,7 @@ def create_router() -> APIRouter:
                 client_task_id=body.client_task_id,
                 prompt=body.prompt,
                 model=body.model,
-                n=body.n,
+                n=parsed_n,
                 size=body.size,
                 base_url=resolve_image_base_url(request),
                 conversation_id=body.conversation_id,
@@ -112,7 +115,7 @@ def create_router() -> APIRouter:
         if model != SUPPORTED_IMAGE_MODEL:
             raise HTTPException(status_code=400, detail={"error": f"model must be {SUPPORTED_IMAGE_MODEL}"})
         uploads = _parse_edit_uploads_or_raise(image, image_list)
-        parsed_n = _parse_n_or_raise(n)
+        parsed_n = _parse_n_or_raise(n, max_n=config.max_images_per_request)
         images_payload: list[UpstreamImageInput] = []
         for upload in uploads:
             image_data = await upload.read()

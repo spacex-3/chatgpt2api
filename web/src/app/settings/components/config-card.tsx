@@ -18,6 +18,7 @@ export function ConfigCard() {
   const setProxy = useSettingsStore((state) => state.setProxy);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
   const setImageRetentionDays = useSettingsStore((state) => state.setImageRetentionDays);
+  const setMaxImagesPerRequest = useSettingsStore((state) => state.setMaxImagesPerRequest);
   const saveConfig = useSettingsStore((state) => state.saveConfig);
   const adminApiKeyHint = String(config?.upstream_api_key || "").trim()
     ? "已输入新的 API Key，保存后会替换当前已配置值。"
@@ -103,6 +104,20 @@ export function ConfigCard() {
                   className="h-10 rounded-xl border-stone-200 bg-white"
                 />
                 <p className="text-xs text-stone-500">自动清理本地缓存图片的保留天数。</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-stone-700">单次最多生成张数</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={String(config?.max_images_per_request || "")}
+                  onChange={(event) => setMaxImagesPerRequest(event.target.value)}
+                  placeholder="10"
+                  className="h-10 rounded-xl border-stone-200 bg-white"
+                />
+                <p className="text-xs text-stone-500">允许范围 1～10，前台提交数量会按这里的上限限制。</p>
               </div>
             </>
           ) : (

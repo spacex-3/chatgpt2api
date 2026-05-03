@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 type ImageComposerProps = {
   prompt: string;
   imageCount: string;
+  maxImageCount: number;
   imageSize: string;
   modelLabel: string;
   activeTaskCount: number;
@@ -29,6 +30,7 @@ type ImageComposerProps = {
 export function ImageComposer({
   prompt,
   imageCount,
+  maxImageCount,
   imageSize,
   modelLabel,
   activeTaskCount,
@@ -189,12 +191,12 @@ export function ImageComposer({
                     </div>
                   )}
                   <div className="flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 sm:h-auto sm:gap-2 sm:px-3 sm:py-1">
-                    <span className="text-[11px] font-medium text-stone-700 sm:text-sm">张数 1-10</span>
+                    <span className="text-[11px] font-medium text-stone-700 sm:text-sm">张数 1-{maxImageCount}</span>
                     <Input
                       type="number"
                       inputMode="numeric"
                       min="1"
-                      max="10"
+                      max={maxImageCount}
                       step="1"
                       value={imageCount}
                       onChange={(event) => onImageCountChange(event.target.value)}

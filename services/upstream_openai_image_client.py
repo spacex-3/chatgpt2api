@@ -45,7 +45,20 @@ def build_upstream_url(api_url: str, path: str) -> str:
     return f"{base}/v1{suffix}"
 
 
-def validate_image_request(prompt: object, model: object, n: object, size: object) -> tuple[str, str, int, str | None]:
+def validate_image_request(
+    prompt: object,
+    model: object,
+    n: object,
+    size: object,
+    *,
+    max_n: int | None = None,
+) -> tuple[str, str, int, str | None]:
+    allowed_max = 10
+    if max_n is not None:
+        try:
+            allowed_max = max(1, min(10, int(max_n)))
+        except (TypeError, ValueError):
+            allowed_max = 10
     normalized_prompt = str(prompt or "").strip()
     if not normalized_prompt:
         raise ValueError("prompt is required")
@@ -56,8 +69,8 @@ def validate_image_request(prompt: object, model: object, n: object, size: objec
         normalized_n = int(n or 1)
     except (TypeError, ValueError) as exc:
         raise ValueError("n must be an integer") from exc
-    if normalized_n < 1 or normalized_n > 10:
-        raise ValueError("n must be between 1 and 10")
+    if normalized_n < 1 or normalized_n > allowed_max:
+        raise ValueError(f"n must be between 1 and {allowed_max}")
     normalized_size = str(size or "").strip() or None
     if normalized_size and normalized_size not in ALLOWED_IMAGE_SIZES:
         raise ValueError("size must be one of auto, 1024x1024, 1536x1024, 1024x1536")

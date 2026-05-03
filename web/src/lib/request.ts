@@ -1,10 +1,12 @@
-import axios, {AxiosError, type AxiosRequestConfig} from "axios";
+import axios, {AxiosError, type AxiosRequestConfig, type InternalAxiosRequestConfig} from "axios";
 
 import webConfig from "@/constants/common-env";
+import { shouldReadStoredAuthKey } from "@/lib/request-auth";
 import {clearStoredAuthSession, getStoredAuthKey, sanitizeNextRoute} from "@/store/auth";
 
 type RequestConfig = AxiosRequestConfig & {
     redirectOnUnauthorized?: boolean;
+    withStoredAuthKey?: boolean;
 };
 
 type ErrorPayload = {
@@ -32,17 +34,20 @@ const request = axios.create({
     baseURL: webConfig.apiUrl.replace(/\/$/, ""),
 });
 
-request.interceptors.request.use(async (config) => {
-    const nextConfig = {...config};
-    const authKey = await getStoredAuthKey();
-    const headers = {...(nextConfig.headers || {})} as Record<string, string>;
-    if (authKey && !headers.Authorization) {
-        headers.Authorization = `Bearer ${authKey}`;
+request.interceptors.request.use(async (config: InternalAxiosRequestConfig & RequestConfig) => {
+    const headers = {...(config.headers || {})} as Record<string, string>;
+    const hasAuthorizationHeader = Boolean(headers.Authorization || headers.authorization);
+    if (shouldReadStoredAuthKey({
+        withStoredAuthKey: config.withStoredAuthKey,
+        hasAuthorizationHeader,
+    })) {
+        const authKey = await getStoredAuthKey();
+        if (authKey) {
+            headers.Authorization = `Bearer ${authKey}`;
+        }
     }
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-expect-error
-    nextConfig.headers = headers;
-    return nextConfig;
+    config.headers = headers as InternalAxiosRequestConfig["headers"];
+    return config;
 });
 
 request.interceptors.response.use(
@@ -80,16 +85,18 @@ type RequestOptions = {
     body?: unknown;
     headers?: Record<string, string>;
     redirectOnUnauthorized?: boolean;
+    withStoredAuthKey?: boolean;
 };
 
 export async function httpRequest<T>(path: string, options: RequestOptions = {}) {
-    const {method = "GET", body, headers, redirectOnUnauthorized = true} = options;
+    const {method = "GET", body, headers, redirectOnUnauthorized = true, withStoredAuthKey = true} = options;
     const config: RequestConfig = {
         url: path,
         method,
         data: body,
         headers,
         redirectOnUnauthorized,
+        withStoredAuthKey,
     };
     const response = await request.request<T>(config);
     return response.data;

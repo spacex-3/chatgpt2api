@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Globe, KeyRound, LoaderCircle, LockKeyhole, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
@@ -9,25 +9,43 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { adminLogin, login, type LoginResponse } from "@/lib/api";
+import { buildAutoLoginSignature, resolveLoginPageState } from "@/lib/login-settings";
 import { useRedirectIfAuthenticated } from "@/lib/use-auth-guard";
-import { getDefaultRouteForRole, sanitizeNextRoute, setStoredAuthSession } from "@/store/auth";
+import { getDefaultRouteForRole, setStoredAuthSession } from "@/store/auth";
 
 type LoginMode = "user" | "admin";
 
 export default function LoginPage() {
   const router = useRouter();
-  const nextRoute = typeof window !== "undefined"
-    ? sanitizeNextRoute(new URLSearchParams(window.location.search).get("next"))
-    : "";
+  const lastAutoLoginSignatureRef = useRef("");
+  const autoLoginAttemptIdRef = useRef(0);
+  const isMountedRef = useRef(true);
+  const locationSearch = typeof window !== "undefined" ? window.location.search : "";
+  const { nextRoute, autoLoginCredentials, hasAutoLoginHint } = useMemo(
+    () => resolveLoginPageState(locationSearch),
+    [locationSearch],
+  );
+  const autoLoginApiUrl = autoLoginCredentials?.upstreamApiUrl || "";
+  const autoLoginApiKey = autoLoginCredentials?.upstreamApiKey || "";
+  const autoLoginSignature = useMemo(
+    () => buildAutoLoginSignature(autoLoginCredentials, nextRoute),
+    [autoLoginCredentials, nextRoute],
+  );
 
   const [mode, setMode] = useState<LoginMode>("user");
   const [apiUrl, setApiUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { isCheckingAuth } = useRedirectIfAuthenticated(nextRoute);
+  const { isCheckingAuth } = useRedirectIfAuthenticated(nextRoute, {
+    ignoreStoredSession: hasAutoLoginHint,
+  });
 
-  const finishLogin = async (data: LoginResponse) => {
+  useEffect(() => () => {
+    isMountedRef.current = false;
+  }, []);
+
+  const finishLogin = useCallback(async (data: LoginResponse) => {
     await setStoredAuthSession({
       key: data.session_token,
       role: data.role,
@@ -35,7 +53,41 @@ export default function LoginPage() {
       name: data.name,
     });
     router.replace(nextRoute || getDefaultRouteForRole(data.role));
-  };
+  }, [nextRoute, router]);
+
+  useEffect(() => {
+    if (!autoLoginSignature || !autoLoginApiUrl || !autoLoginApiKey || isCheckingAuth || lastAutoLoginSignatureRef.current === autoLoginSignature) {
+      return;
+    }
+
+    const attemptId = autoLoginAttemptIdRef.current + 1;
+    autoLoginAttemptIdRef.current = attemptId;
+    lastAutoLoginSignatureRef.current = autoLoginSignature;
+    setMode("user");
+    setApiUrl(autoLoginApiUrl);
+    setApiKey(autoLoginApiKey);
+    setIsSubmitting(true);
+
+    void (async () => {
+      try {
+        const data = await login(autoLoginApiUrl, autoLoginApiKey);
+        if (!isMountedRef.current || autoLoginAttemptIdRef.current !== attemptId) {
+          return;
+        }
+        await finishLogin(data);
+      } catch (error) {
+        if (!isMountedRef.current || autoLoginAttemptIdRef.current !== attemptId) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "自动登录失败";
+        toast.error(`自动登录失败，请手动登录：${message}`);
+      } finally {
+        if (isMountedRef.current && autoLoginAttemptIdRef.current === attemptId) {
+          setIsSubmitting(false);
+        }
+      }
+    })();
+  }, [autoLoginApiKey, autoLoginApiUrl, autoLoginSignature, finishLogin, isCheckingAuth]);
 
   const handleUserLogin = async () => {
     const normalizedApiUrl = apiUrl.trim();
@@ -103,7 +155,7 @@ export default function LoginPage() {
               <p className="text-sm leading-6 text-stone-500">
                 {mode === "admin"
                   ? "使用 CHATGPT2API_ADMIN_PASSWORD 登录后台管理能力。"
-                  : "输入你自己的 NewAPI 标准绘图接口地址与 API Key，仅用于当前用户会话。"}
+                  : "输入你自己的 NewAPI 标准绘图接口地址与 API Key，仅用于当前用户会话；若链接里带有 settings，也会自动尝试普通用户登录。"}
               </p>
             </div>
           </div>

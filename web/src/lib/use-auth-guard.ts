@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   getDefaultRouteForRole,
   getStoredAuthSession,
+  getStoredAuthSessionSync,
   sanitizeNextRoute,
   type AuthRole,
   type StoredAuthSession,
@@ -25,13 +26,8 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
   useEffect(() => {
     let active = true;
 
-    const load = async () => {
-      const roleList = allowedRolesKey ? (allowedRolesKey.split(",") as AuthRole[]) : [];
-      const storedSession = await getStoredAuthSession();
-      if (!active) {
-        return;
-      }
-
+    const roleList = allowedRolesKey ? (allowedRolesKey.split(",") as AuthRole[]) : [];
+    const applySession = (storedSession: StoredAuthSession | null) => {
       if (!storedSession) {
         setSession(null);
         setIsCheckingAuth(false);
@@ -39,18 +35,32 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
           ? sanitizeNextRoute(`${window.location.pathname}${window.location.search}${window.location.hash}`)
           : "";
         router.replace(nextPath ? `/login?next=${encodeURIComponent(nextPath)}` : "/login");
-        return;
+        return true;
       }
 
       if (roleList.length > 0 && !roleList.includes(storedSession.role)) {
         setSession(storedSession);
         setIsCheckingAuth(false);
         router.replace(getDefaultRouteForRole(storedSession.role));
-        return;
+        return true;
       }
 
       setSession(storedSession);
       setIsCheckingAuth(false);
+      return true;
+    };
+
+    const load = async () => {
+      const syncSession = getStoredAuthSessionSync();
+      if (syncSession) {
+        applySession(syncSession);
+        return;
+      }
+      const storedSession = await getStoredAuthSession();
+      if (!active) {
+        return;
+      }
+      applySession(storedSession);
     };
 
     void load();
@@ -62,14 +72,27 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
   return { isCheckingAuth, session };
 }
 
-export function useRedirectIfAuthenticated(redirectPath?: string) {
+export function useRedirectIfAuthenticated(
+  redirectPath?: string,
+  options?: { ignoreStoredSession?: boolean },
+) {
   const router = useRouter();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const ignoreStoredSession = Boolean(options?.ignoreStoredSession);
 
   useEffect(() => {
     let active = true;
 
     const load = async () => {
+      if (ignoreStoredSession) {
+        setIsCheckingAuth(false);
+        return;
+      }
+      const syncSession = getStoredAuthSessionSync();
+      if (syncSession) {
+        router.replace(sanitizeNextRoute(redirectPath) || getDefaultRouteForRole(syncSession.role));
+        return;
+      }
       const storedSession = await getStoredAuthSession();
       if (!active) {
         return;
@@ -87,7 +110,7 @@ export function useRedirectIfAuthenticated(redirectPath?: string) {
     return () => {
       active = false;
     };
-  }, [redirectPath, router]);
+  }, [ignoreStoredSession, redirectPath, router]);
 
   return { isCheckingAuth };
 }

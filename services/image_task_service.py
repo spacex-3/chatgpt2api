@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from services.config import DATA_DIR, config
-from services.upstream_openai_image_client import UpstreamImageInput, UpstreamOpenAIImageClient
+from services.upstream_openai_image_client import (
+    UpstreamImageInput,
+    UpstreamOpenAIImageClient,
+    normalize_image_inputs,
+    validate_image_request,
+)
 
 TASK_STATUS_QUEUED = "queued"
 TASK_STATUS_RUNNING = "running"
@@ -171,11 +176,18 @@ class ImageTaskService:
         conversation_id: str | None = None,
         conversation_title: str | None = None,
     ) -> dict[str, Any]:
+        normalized_prompt, normalized_model, normalized_n, normalized_size = validate_image_request(
+            prompt,
+            model,
+            n,
+            size,
+            max_n=config.max_images_per_request,
+        )
         payload = {
-            "prompt": prompt,
-            "model": model,
-            "n": n,
-            "size": size,
+            "prompt": normalized_prompt,
+            "model": normalized_model,
+            "n": normalized_n,
+            "size": normalized_size,
             "base_url": base_url,
             "upstream_api_url": _clean(identity.get("upstream_api_url")),
             "upstream_api_key": _clean(identity.get("upstream_api_key")),
@@ -204,13 +216,21 @@ class ImageTaskService:
         conversation_id: str | None = None,
         conversation_title: str | None = None,
     ) -> dict[str, Any]:
+        normalized_prompt, normalized_model, normalized_n, normalized_size = validate_image_request(
+            prompt,
+            model,
+            n,
+            size,
+            max_n=config.max_images_per_request,
+        )
+        normalized_images = normalize_image_inputs(images)
         payload = {
-            "prompt": prompt,
-            "model": model,
-            "n": n,
-            "size": size,
+            "prompt": normalized_prompt,
+            "model": normalized_model,
+            "n": normalized_n,
+            "size": normalized_size,
             "base_url": base_url,
-            "images": images,
+            "images": normalized_images,
             "upstream_api_url": _clean(identity.get("upstream_api_url")),
             "upstream_api_key": _clean(identity.get("upstream_api_key")),
         }

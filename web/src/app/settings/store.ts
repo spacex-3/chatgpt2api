@@ -15,6 +15,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
     image_retention_days: Number(config.image_retention_days || 30),
+    max_images_per_request: Number(config.max_images_per_request || 10),
     model: "gpt-image-2",
   };
 }
@@ -32,6 +33,7 @@ type SettingsStore = {
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
   setImageRetentionDays: (value: string) => void;
+  setMaxImagesPerRequest: (value: string) => void;
 };
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
@@ -72,6 +74,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
             proxy: String(config.proxy || "").trim(),
             base_url: String(config.base_url || "").trim(),
             image_retention_days: Math.max(1, Number(config.image_retention_days) || 30),
+            max_images_per_request: Math.min(10, Math.max(1, Number(config.max_images_per_request) || 10)),
           }
         : {
             upstream_api_url: String(config.upstream_api_url || "").trim(),
@@ -120,5 +123,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   setImageRetentionDays: (value) => {
     set((state) => state.config ? { config: { ...state.config, image_retention_days: value } } : {});
+  },
+
+  setMaxImagesPerRequest: (value) => {
+    set((state) => state.config ? { config: { ...state.config, max_images_per_request: value } } : {});
   },
 }));

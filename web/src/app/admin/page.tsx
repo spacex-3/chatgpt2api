@@ -62,6 +62,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     proxy: String(config.proxy || ""),
     base_url: String(config.base_url || ""),
     image_retention_days: Number(config.image_retention_days || 30),
+    max_images_per_request: Number(config.max_images_per_request || 10),
     model: "gpt-image-2",
   };
 }
@@ -117,6 +118,7 @@ function AdminPageContent() {
         proxy: String(config.proxy || "").trim(),
         base_url: String(config.base_url || "").trim(),
         image_retention_days: Math.max(1, Number(config.image_retention_days) || 30),
+        max_images_per_request: Math.min(10, Math.max(1, Number(config.max_images_per_request) || 10)),
       });
       setConfig(normalizeConfig(data.config));
       if (data.session_token && data.subject_id && data.name) {
@@ -211,6 +213,19 @@ function AdminPageContent() {
               placeholder="30"
               className="h-10 rounded-xl border-stone-200 bg-white"
             />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-stone-700">单次最多生成张数</label>
+            <Input
+              type="number"
+              min={1}
+              max={10}
+              value={String(config?.max_images_per_request || "")}
+              onChange={(event) => setConfig((prev) => prev ? { ...prev, max_images_per_request: event.target.value } : prev)}
+              placeholder="10"
+              className="h-10 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs text-stone-500">允许范围 1～10，前台提交数量会按这里的上限限制。</p>
           </div>
           <div className="space-y-2">
             <label className="text-sm text-stone-700">固定模型</label>

@@ -30,6 +30,7 @@ class ConfigLoadingTests(unittest.TestCase):
                 "proxy": " http://127.0.0.1:7890 ",
                 "base_url": "https://public.test/",
                 "image_retention_days": "7",
+                "max_images_per_request": "6",
             })
 
             self.assertEqual(updated["upstream_api_url"], "https://unit.test/v1")
@@ -37,6 +38,7 @@ class ConfigLoadingTests(unittest.TestCase):
             self.assertEqual(updated["proxy"], "http://127.0.0.1:7890")
             self.assertEqual(updated["base_url"], "https://public.test")
             self.assertEqual(updated["image_retention_days"], 7)
+            self.assertEqual(updated["max_images_per_request"], 6)
             self.assertEqual(updated["model"], "gpt-image-2")
 
     def test_get_admin_public_masks_upstream_api_key(self) -> None:
@@ -54,6 +56,15 @@ class ConfigLoadingTests(unittest.TestCase):
             self.assertEqual(public["upstream_api_key"], "")
             self.assertEqual(public["upstream_api_key_masked"], "sk-...9876")
             self.assertTrue(public["upstream_api_key_configured"])
+
+    def test_max_images_per_request_defaults_to_10_when_value_is_too_large(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "config.json"
+            path.write_text(json.dumps({"max_images_per_request": 99}), encoding="utf-8")
+
+            store = ConfigStore(path)
+
+            self.assertEqual(store.max_images_per_request, 10)
 
 
 if __name__ == "__main__":

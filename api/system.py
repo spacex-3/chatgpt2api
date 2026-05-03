@@ -32,6 +32,7 @@ class SettingsUpdateRequest(BaseModel):
     proxy: str | None = None
     base_url: str | None = None
     image_retention_days: int | None = Field(default=None, ge=1)
+    max_images_per_request: int | None = Field(default=None, ge=1, le=10)
 
 
 class AdminLoginRequest(BaseModel):
@@ -93,6 +94,7 @@ def _user_settings_config(identity: dict[str, object]) -> dict[str, object]:
         "upstream_api_url": str(identity.get("upstream_api_url") or "").strip(),
         "upstream_api_key": str(identity.get("upstream_api_key") or "").strip(),
         "base_url": config.base_url,
+        "max_images_per_request": config.max_images_per_request,
         "model": "gpt-image-2",
     }
 
@@ -188,6 +190,7 @@ def create_router(app_version: str) -> APIRouter:
             "proxy": body.proxy if body.proxy is not None else current.get("proxy"),
             "base_url": body.base_url if body.base_url is not None else current.get("base_url"),
             "image_retention_days": body.image_retention_days if body.image_retention_days is not None else current.get("image_retention_days"),
+            "max_images_per_request": body.max_images_per_request if body.max_images_per_request is not None else current.get("max_images_per_request"),
         }
         next_api_url = str(next_values.get("upstream_api_url") or "").strip()
         next_api_key = str(next_values.get("upstream_api_key") or "").strip()
